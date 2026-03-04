@@ -39,37 +39,55 @@ CACHE_TTL = 60  # seconds; keeps Sheet reads fast, avoids quota issues
 def init_sheets(spreadsheet_id: str, credentials_path: str = "credentials.json", token_path: str = "token.json") -> None:
     global _spreadsheet
     creds = None
-    
-    # Check for Google credentials in environment variable (for cloud deployment)
+
+    # Support credentials.json content via env var (for Railway / cloud deployment)
     creds_json_env = os.getenv("GOOGLE_CREDS_JSON")
     if creds_json_env:
-        # Create a temporary file with the credentials
         try:
             creds_dict = json.loads(creds_json_env)
-            # Use a persistent location for cloud environments
             credentials_path = "/tmp/credentials.json"
-            with open(credentials_path, "w") as tmp_file:
-                json.dump(creds_dict, tmp_file)
-            logger.info("Using Google credentials from environment variable")
+            with open(credentials_path, "w") as f:
+                json.dump(creds_dict, f)
+            logger.info("Using Google credentials from GOOGLE_CREDS_JSON env var")
         except json.JSONDecodeError as e:
-            logger.error("Invalid JSON in GOOGLE_CREDS_JSON environment variable: %s", e)
+            logger.error("Invalid JSON in GOOGLE_CREDS_JSON: %s", e)
             raise
-    
-    # Load existing token if it exists
-    if os.path.exists(token_path):
+
+    # Support token.json content via env var (for Railway / cloud deployment).
+    # Generate token.json locally first by running the bot once, then paste
+    # its content into the GOOGLE_TOKEN_JSON environment variable on Railway.
+    token_json_env = os.getenv("GOOGLE_TOKEN_JSON")
+    if token_json_env:
+        try:
+            token_data = json.loads(token_json_env)
+            creds = Credentials.from_authorized_user_info(token_data, scopes=SCOPES)
+            logger.info("Using Google token from GOOGLE_TOKEN_JSON env var")
+        except Exception as e:
+            logger.error("Invalid GOOGLE_TOKEN_JSON: %s", e)
+            raise
+    elif os.path.exists(token_path):
         creds = Credentials.from_authorized_user_file(token_path, scopes=SCOPES)
-    
-    # If no valid token, run the OAuth flow
+
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
+            # Token refresh works without a browser — safe on Railway
             creds.refresh(Request())
+            if not token_json_env:
+                with open(token_path, "w") as f:
+                    f.write(creds.to_json())
         else:
+            # First-time OAuth flow — requires a browser, run locally only
+            if not os.path.exists(credentials_path):
+                raise FileNotFoundError(credentials_path)
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, scopes=SCOPES)
             creds = flow.run_local_server(port=0)
-        # Save the token for next time
-        with open(token_path, 'w') as token_file:
-            token_file.write(creds.to_json())
-    
+            with open(token_path, "w") as f:
+                f.write(creds.to_json())
+            logger.info(
+                "token.json generated. To deploy on Railway, set the GOOGLE_TOKEN_JSON "
+                "environment variable to the contents of token.json."
+            )
+
     client = gspread.authorize(creds)
     _spreadsheet = client.open_by_key(spreadsheet_id)
     logger.info("Connected to Google Sheets: %s", spreadsheet_id)
