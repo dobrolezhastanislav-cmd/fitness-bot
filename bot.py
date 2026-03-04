@@ -49,6 +49,9 @@ from handlers import (
     cb_register,
     cb_cancel_registration,
     build_coach_conv_handler,
+    build_mark_class_conv_handler,
+    cb_toggle_attendance,
+    cb_save_attendance,
 )
 
 logging.basicConfig(
@@ -89,7 +92,8 @@ def main() -> None:
     # ── Build application ───────────────────────────────────────────────────
     app = Application.builder().token(config.BOT_TOKEN).build()
 
-    # Coach broadcast conversation (must be registered BEFORE the generic MessageHandler)
+    # Conversation handlers (must be registered BEFORE the generic MessageHandler)
+    app.add_handler(build_mark_class_conv_handler())
     app.add_handler(build_coach_conv_handler())
 
     # Commands
@@ -102,6 +106,8 @@ def main() -> None:
     # Inline keyboard callbacks
     app.add_handler(CallbackQueryHandler(cb_register, pattern=r"^r:"))
     app.add_handler(CallbackQueryHandler(cb_cancel_registration, pattern=r"^cx:"))
+    app.add_handler(CallbackQueryHandler(cb_toggle_attendance, pattern=r"^mkat:"))
+    app.add_handler(CallbackQueryHandler(cb_save_attendance, pattern=r"^mksave:"))
 
     # All other text messages (main menu buttons + fallback)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

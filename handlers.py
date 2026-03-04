@@ -14,6 +14,7 @@ Conversation states (coach broadcast flow):
 """
 import logging
 import os
+import re
 from typing import Optional
 
 from telegram import (
@@ -61,6 +62,7 @@ BTN_SCHEDULE = "📅 Розклад"
 BTN_RULES = "📋 Правила студії"
 BTN_INSTAGRAM = "📸 Instagram"
 BTN_BROADCAST = "📢 Розіслати повідомлення"
+BTN_MARK_CLASS = "✅ Відмітити заняття"
 
 CLIENT_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -75,13 +77,17 @@ CLIENT_KEYBOARD = ReplyKeyboardMarkup(
 COACH_KEYBOARD = ReplyKeyboardMarkup(
     [
         [BTN_BROADCAST],
+        [BTN_MARK_CLASS],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
 )
 
-# ConversationHandler states
+# ConversationHandler states — broadcast
 COACH_SELECT_TARGET, COACH_SELECT_CLASS, COACH_TYPE_MSG, COACH_CONFIRM = range(4)
+
+# ConversationHandler states — mark class
+MARK_SELECT_CLASS, MARK_RAN_OR_NOT, MARK_CANCEL_REASON = range(10, 13)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -426,6 +432,217 @@ async def _show_my_info(
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 
+# ── UC-7: Coach mark class as run / not run ──────────────────────────────────
+
+def _build_attendance_keyboard(class_id: str, attendees: list, selected: set) -> InlineKeyboardMarkup:
+    """Build inline keyboard for toggling per-attendee presence."""
+    buttons = []
+    for a in attendees:
+        tick = "✅" if a["client_id"] in selected else "☐"
+        buttons.append([InlineKeyboardButton(
+            f"{tick} {a['name']}",
+            callback_data=f"mkat:{class_id}:{a['client_id']}",
+        )])
+    buttons.append([InlineKeyboardButton(
+        "💾 Зберегти відвідуваність",
+        callback_data=f"mksave:{class_id}",
+    )])
+    return InlineKeyboardMarkup(buttons)
+
+
+async def mark_class_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry point: coach pressed 'Mark class' button."""
+    user_id = update.effective_user.id
+    if not config.is_coach(user_id):
+        return ConversationHandler.END
+
+    try:
+        classes = sheets.get_ended_planned_classes()
+    except Exception as exc:
+        logger.error("mark_class_start: %s", exc)
+        await update.message.reply_text("⚠️ Помилка підключення. Спробуйте пізніше.")
+        return ConversationHandler.END
+
+    if not classes:
+        await update.message.reply_text(
+            "Немає занять, які очікують на відмітку.",
+            reply_markup=_main_keyboard(user_id),
+        )
+        return ConversationHandler.END
+
+    buttons = [
+        [InlineKeyboardButton(_class_label(c), callback_data=f"mk:{c['ClassID']}")]
+        for c in classes
+    ]
+    await update.message.reply_text(
+        "Оберіть заняття для відмітки:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+    return MARK_SELECT_CLASS
+
+
+async def mark_class_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Coach selected a class — ask if it ran."""
+    query = update.callback_query
+    await query.answer()
+    class_id = query.data.split(":", 1)[1]
+
+    cls = sheets.get_class_by_id(class_id)
+    class_label = _class_label(cls) if cls else f"#{class_id}"
+    context.user_data["marking_class_id"] = class_id
+
+    await query.edit_message_text(
+        f"Заняття *{class_label}*\n\nВоно відбулося?",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Так", callback_data=f"mkran:{class_id}:yes"),
+            InlineKeyboardButton("❌ Ні", callback_data=f"mkran:{class_id}:no"),
+        ]]),
+    )
+    return MARK_RAN_OR_NOT
+
+
+async def mark_class_ran(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Coach answered yes/no to 'did the class run?'."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split(":", 2)  # ["mkran", class_id, "yes|no"]
+    class_id, answer = parts[1], parts[2]
+
+    cls = sheets.get_class_by_id(class_id)
+    class_label = _class_label(cls) if cls else f"#{class_id}"
+
+    if answer == "yes":
+        sheets.update_class_status(class_id, "Done")
+
+        attendance_rows = sheets.get_planned_attendance_rows(class_id)
+        if not attendance_rows:
+            await query.edit_message_text(
+                f"✅ Заняття *{class_label}* позначено як проведене.\n"
+                f"Записаних клієнтів не було.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return ConversationHandler.END
+
+        attendees = [
+            {
+                "client_id": str(r.get("ClientID", "")).strip(),
+                "name": str(r.get("Client", "")).strip() or str(r.get("ClientID", "")),
+            }
+            for r in attendance_rows
+        ]
+        context.user_data["attendance"] = {
+            "class_id": class_id,
+            "attendees": attendees,
+            "selected": set(),
+        }
+
+        await query.edit_message_text(
+            f"✅ Заняття *{class_label}* проведено.\n\nПозначте, хто був присутній:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=_build_attendance_keyboard(class_id, attendees, set()),
+        )
+        return ConversationHandler.END
+
+    else:  # no
+        sheets.update_class_status(class_id, "Cancelled")
+        context.user_data["marking_class_id"] = class_id
+        await query.edit_message_text(
+            f"❌ Заняття *{class_label}* позначено як скасоване.\n\n"
+            f"Вкажіть причину скасування:",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return MARK_CANCEL_REASON
+
+
+async def mark_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Coach typed a cancellation reason — store it and finish."""
+    reason = (update.message.text or "").strip()
+    class_id = context.user_data.pop("marking_class_id", None)
+
+    if class_id:
+        sheets.set_cancellation_notes(class_id, reason)
+        cls = sheets.get_class_by_id(class_id)
+        class_label = _class_label(cls) if cls else f"#{class_id}"
+        await update.message.reply_text(
+            f"✅ Причину скасування заняття *{class_label}* збережено.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=_main_keyboard(update.effective_user.id),
+        )
+    else:
+        await update.message.reply_text("✅ Збережено.", reply_markup=_main_keyboard(update.effective_user.id))
+
+    return ConversationHandler.END
+
+
+async def mark_class_cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Fallback /cancel inside the mark-class conversation."""
+    context.user_data.pop("marking_class_id", None)
+    context.user_data.pop("attendance", None)
+    await update.message.reply_text(
+        "❌ Відмічення заняття скасовано.",
+        reply_markup=_main_keyboard(update.effective_user.id),
+    )
+    return ConversationHandler.END
+
+
+async def cb_toggle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle one attendee's presence on/off."""
+    query = update.callback_query
+    await query.answer()
+
+    if not config.is_coach(query.from_user.id):
+        return
+
+    _, class_id, client_id = query.data.split(":", 2)
+
+    att = context.user_data.get("attendance")
+    if not att or att["class_id"] != class_id:
+        await query.answer("Дані відмітки не знайдено. Почніть заново.", show_alert=True)
+        return
+
+    selected: set = att["selected"]
+    if client_id in selected:
+        selected.discard(client_id)
+    else:
+        selected.add(client_id)
+
+    await query.edit_message_reply_markup(
+        reply_markup=_build_attendance_keyboard(class_id, att["attendees"], selected),
+    )
+
+
+async def cb_save_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Save the attendance selection and mark Done / NoShow in the sheet."""
+    query = update.callback_query
+    await query.answer()
+
+    if not config.is_coach(query.from_user.id):
+        return
+
+    class_id = query.data.split(":", 1)[1]
+    att = context.user_data.pop("attendance", None)
+
+    if not att or att["class_id"] != class_id:
+        await query.edit_message_text("⚠️ Дані відмітки не знайдено. Почніть заново.")
+        return
+
+    attended_ids = list(att["selected"])
+    sheets.mark_attendance_statuses(class_id, attended_ids)
+
+    cls = sheets.get_class_by_id(class_id)
+    class_label = _class_label(cls) if cls else f"#{class_id}"
+    done = len(attended_ids)
+    noshow = len(att["attendees"]) - done
+
+    await query.edit_message_text(
+        f"✅ Відвідуваність збережена для *{class_label}*\n\n"
+        f"Були присутні: {done} | Відсутні: {noshow}",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
 # ── UC-6: Coach broadcast ─────────────────────────────────────────────────────
 
 async def coach_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -571,6 +788,21 @@ async def coach_confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def coach_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("❌ Розсилку скасовано.", reply_markup=_main_keyboard(update.effective_user.id))
     return ConversationHandler.END
+
+
+# ── ConversationHandler for mark-class flow ───────────────────────────────────
+
+def build_mark_class_conv_handler() -> ConversationHandler:
+    return ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_MARK_CLASS)}$"), mark_class_start)],
+        states={
+            MARK_SELECT_CLASS: [CallbackQueryHandler(mark_class_select, pattern=r"^mk:")],
+            MARK_RAN_OR_NOT: [CallbackQueryHandler(mark_class_ran, pattern=r"^mkran:")],
+            MARK_CANCEL_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, mark_cancel_reason)],
+        },
+        fallbacks=[CommandHandler("cancel", mark_class_cancel_conv)],
+        allow_reentry=True,
+    )
 
 
 # ── ConversationHandler for coach broadcast ──────────────────────────────────

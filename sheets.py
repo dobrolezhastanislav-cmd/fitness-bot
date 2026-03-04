@@ -441,6 +441,103 @@ def register_client(client: dict, cls: dict) -> tuple[bool, str]:
         return False, "error"
 
 
+def get_ended_planned_classes() -> list[dict]:
+    """Return all Planned classes whose ClassEnd has already passed."""
+    now = datetime.now()
+    result = []
+    for r in _records("2_1_Classes", force=True):
+        if str(r.get("ClassStatus", "")).strip() != "Planned":
+            continue
+        end_dt = _parse_datetime(str(r.get("ClassDate", "")), str(r.get("ClassEnd", "")))
+        if end_dt and end_dt < now:
+            result.append(r)
+    return result
+
+
+def update_class_status(class_id, new_status: str) -> bool:
+    """Update ClassStatus for a class row in 2_1_Classes."""
+    ws = _sheet("2_1_Classes")
+    all_values = ws.get_all_values()
+    if not all_values:
+        return False
+    headers = all_values[0]
+    lc = [h.strip().lower() for h in headers]
+    try:
+        id_col = lc.index("classid")
+        status_col = lc.index("classstatus")
+    except ValueError:
+        return False
+    for idx, row in enumerate(all_values[1:], start=2):
+        if len(row) > id_col and str(row[id_col]).strip() == str(class_id):
+            ws.update_cell(idx, status_col + 1, new_status)
+            invalidate("2_1_Classes")
+            return True
+    return False
+
+
+def get_planned_attendance_rows(class_id) -> list[dict]:
+    """Return Planned attendance rows for a class."""
+    return [
+        r for r in _records("2_2_Attendance")
+        if (str(r.get("ClassID", "")).strip() == str(class_id)
+            and str(r.get("AttendanceStatus", "")).strip() == "Planned")
+    ]
+
+
+def mark_attendance_statuses(class_id, attended_client_ids: list) -> bool:
+    """Set AttendanceStatus to Done or NoShow for all Planned rows of a class."""
+    ws = _sheet("2_2_Attendance")
+    all_values = ws.get_all_values()
+    if not all_values:
+        return False
+    headers = all_values[0]
+    lc = [h.strip().lower() for h in headers]
+    try:
+        class_col = lc.index("classid")
+        client_col = lc.index("clientid")
+        status_col = lc.index("attendancestatus")
+    except ValueError:
+        return False
+    attended_set = {str(cid) for cid in attended_client_ids}
+    updated = False
+    for idx, row in enumerate(all_values[1:], start=2):
+        if (len(row) > max(class_col, client_col, status_col)
+                and str(row[class_col]).strip() == str(class_id)
+                and str(row[status_col]).strip() == "Planned"):
+            new_status = "Done" if str(row[client_col]).strip() in attended_set else "NoShow"
+            ws.update_cell(idx, status_col + 1, new_status)
+            updated = True
+    if updated:
+        invalidate("2_2_Attendance")
+    return updated
+
+
+def set_cancellation_notes(class_id, reason: str) -> bool:
+    """Write cancellation reason into Notes for all Planned attendance rows of a class."""
+    ws = _sheet("2_2_Attendance")
+    all_values = ws.get_all_values()
+    if not all_values:
+        return False
+    headers = all_values[0]
+    lc = [h.strip().lower() for h in headers]
+    try:
+        class_col = lc.index("classid")
+        status_col = lc.index("attendancestatus")
+        notes_col = lc.index("notes")
+    except ValueError:
+        return False
+    updated = False
+    for idx, row in enumerate(all_values[1:], start=2):
+        if (len(row) > max(class_col, status_col, notes_col)
+                and str(row[class_col]).strip() == str(class_id)
+                and str(row[status_col]).strip() == "Planned"):
+            ws.update_cell(idx, notes_col + 1, reason)
+            updated = True
+    if updated:
+        invalidate("2_2_Attendance")
+    return updated
+
+
 def cancel_registration(client_id, class_id) -> tuple[bool, str]:
     """
     Set AttendanceStatus to 'Cancelled' for a Planned row.
