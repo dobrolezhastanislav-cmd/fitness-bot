@@ -47,6 +47,8 @@ def load_config() -> dict:
         COACH_TG_IDS = [int(x.strip()) for x in coaches_env.split(",") if x.strip()]
     else:
         COACH_TG_IDS = [int(x) for x in data.get("coach_telegram_ids", [])]
+    import logging as _log
+    _log.getLogger(__name__).info("COACH_TG_IDS loaded: %s (from env: %r)", COACH_TG_IDS, coaches_env)
 
     sheet_env = os.getenv("SPREADSHEET_ID", "").strip()
     SPREADSHEET_ID = sheet_env if sheet_env else data.get("google_spreadsheet_id", "").strip()

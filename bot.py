@@ -114,11 +114,6 @@ def main() -> None:
 
 
     # ── Start polling ───────────────────────────────────────────────────────
-    # remove any webhook in case it was previously set; polling and webhook conflict
-    try:
-        app.bot.delete_webhook()
-    except Exception:
-        pass
     logger.info("Bot started. Press Ctrl+C to stop.")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

@@ -687,7 +687,7 @@ async def coach_select_target(update: Update, context: ContextTypes.DEFAULT_TYPE
     planned_class_ids = {
         str(a.get("ClassID", "")).strip()
         for a in attendance
-        if str(a.get("AttendanceStatus", "")).strip() == "Planned"
+        if str(a.get("AttendanceStatus", "")).strip().lower() == "planned"
     }
     classes_with_attendees = [c for c in classes if str(c.get("ClassID", "")) in planned_class_ids]
 
@@ -802,6 +802,7 @@ def build_mark_class_conv_handler() -> ConversationHandler:
         },
         fallbacks=[CommandHandler("cancel", mark_class_cancel_conv)],
         allow_reentry=True,
+        per_message=False,
     )
 
 
@@ -818,4 +819,5 @@ def build_coach_conv_handler() -> ConversationHandler:
         },
         fallbacks=[CommandHandler("cancel", coach_cancel)],
         allow_reentry=True,
+        per_message=False,
     )
