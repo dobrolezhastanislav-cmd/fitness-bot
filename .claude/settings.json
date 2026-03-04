@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import json; d=json.load\\(open\\(''c:/Users/stanislav.dobrolezha/fitness-bot/config.json''\\)\\); print\\(''owner_telegram_id:'', repr\\(d.get\\(''owner_telegram_id''\\)\\)\\)\")",
+      "Bash(python -c \":*)"
+    ]
+  }
+}
