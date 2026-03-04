@@ -39,9 +39,17 @@ def load_config() -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    OWNER_TG_ID = int(data.get("owner_telegram_id", 0))
-    COACH_TG_IDS = [int(x) for x in data.get("coach_telegram_ids", [])]
-    SPREADSHEET_ID = data.get("google_spreadsheet_id", "").strip()
+    owner_env = os.getenv("OWNER_TG_ID", "").strip()
+    OWNER_TG_ID = int(owner_env) if owner_env else int(data.get("owner_telegram_id", 0))
+
+    coaches_env = os.getenv("COACH_TG_IDS", "").strip()
+    if coaches_env:
+        COACH_TG_IDS = [int(x.strip()) for x in coaches_env.split(",") if x.strip()]
+    else:
+        COACH_TG_IDS = [int(x) for x in data.get("coach_telegram_ids", [])]
+
+    sheet_env = os.getenv("SPREADSHEET_ID", "").strip()
+    SPREADSHEET_ID = sheet_env if sheet_env else data.get("google_spreadsheet_id", "").strip()
     CREDENTIALS_PATH = str(BASE_DIR / data.get("credentials_file", "credentials.json"))
     INSTAGRAM_URL = data.get("instagram_url", INSTAGRAM_URL)
     TIMEZONE = data.get("timezone", "Europe/Kiev")
