@@ -1,7 +1,4 @@
 {
-  "owner_telegram_id": 1842631257,
-  "coach_telegram_ids": [1842631257],
-  "google_spreadsheet_id": "169s6VWKvMlzJ9FH0L87eG0fzDAYBeXOJSL75IbDrh4U",
   "credentials_file": "credentials.json",
   "instagram_url": "https://www.instagram.com/be_the_best_fitness_studio/",
   "schedule_file": "files/schedule.jpg",
