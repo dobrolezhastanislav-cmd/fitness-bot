@@ -120,6 +120,22 @@ async def _send_file_or_text(update: Update, filepath: str, fallback: str, parse
         await update.message.reply_text(fallback, parse_mode=parse_mode)
 
 
+# ── TEMP: Coach notifications on client registration/cancellation ────────────
+# To remove: delete this function + the 2 lines that call it in cb_register and cb_cancel_registration
+
+async def _notify_coaches(context, client: dict, cls: dict, action: str) -> None:
+    client_name = f"{client.get('FirstName', '')} {client.get('LastName', '')}".strip() or "Клієнт"
+    class_label = f"{cls.get('ClassName', '—')} ({_short_datetime(cls.get('ClassDate', ''), cls.get('ClassStart', ''))})" if cls else "—"
+    text = f"📝 {client_name} записалася на {class_label}" if action == "register" else f"❌ {client_name} скасувала запис на {class_label}"
+    for coach_id in config.COACH_TG_IDS:
+        try:
+            await context.bot.send_message(chat_id=coach_id, text=text)
+        except Exception as exc:
+            logger.warning("Could not notify coach %s: %s", coach_id, exc)
+
+# ── END TEMP ──────────────────────────────────────────────────────────────────
+
+
 # ── First contact (UC-1) ─────────────────────────────────────────────────────
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -305,6 +321,7 @@ async def cb_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"*{cls.get('ClassName')}* ({formatted})",
                 parse_mode=ParseMode.MARKDOWN,
             )
+            await _notify_coaches(context, client, cls, "register")  # TEMP
         elif err == "already_registered":
             await query.edit_message_text("Ти вже йдеш на це заняття. 😊")
         elif err == "closed":
@@ -385,6 +402,7 @@ async def cb_cancel_registration(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(
             f"✅ Твій запис на {cls_label} скасовано. Чекаємо тебе на наступних заняттях! 🙏",
         )
+        await _notify_coaches(context, client, cls, "cancel")  # TEMP
     elif err == "not_allowed":
         await query.edit_message_text(
             "Нажаль, скасувати запис на це заняття вже неможливо. 😔 Звернися до Олі, щось придумаєм ;)"
