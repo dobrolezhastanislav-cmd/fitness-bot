@@ -15,6 +15,7 @@ import tempfile
 from datetime import datetime, date, timedelta
 from typing import Optional
 
+import pytz
 import gspread
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -120,6 +121,13 @@ def invalidate(*tabs: str) -> None:
 # ---- Date/time helpers -----------------------------------------------------
 
 DATE_FORMATS = ["%d.%m.%Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"]
+
+_KYIV_TZ = pytz.timezone("Europe/Kiev")
+
+
+def _kyiv_now_str() -> str:
+    """Return current Kyiv date-time as 'DD.MM.YYYY HH:MM:SS' for DLM column."""
+    return datetime.now(_KYIV_TZ).strftime("%d.%m.%Y %H:%M:%S")
 
 
 def _parse_date(value: str) -> Optional[date]:
@@ -321,6 +329,11 @@ def register_client(client: dict, cls: dict) -> tuple[bool, str]:
                             and str(row_vals[class_col]).strip() == str(cls["ClassID"])
                             and str(row_vals[status_col]).strip().lower() == "cancelled"):
                         ws.update_cell(idx, status_col + 1, "Planned")
+                        try:
+                            dlm_col = lc.index("dlm") + 1
+                            ws.update_cell(idx, dlm_col, _kyiv_now_str())
+                        except (ValueError, Exception):
+                            pass
                         invalidate("2_2_Attendance", "2_1_Classes")
                         return True, ""
             except ValueError:
@@ -424,6 +437,7 @@ def register_client(client: dict, cls: dict) -> tuple[bool, str]:
         classdate_col = col_idx('classdate') or 4
         classname_col = col_idx('classname') or 7
         status_col = col_idx('attendancestatus') or 10
+        dlm_col = col_idx('dlm')
 
         new_row_1based = insert_idx + 1
         try:
@@ -431,6 +445,8 @@ def register_client(client: dict, cls: dict) -> tuple[bool, str]:
             ws.update_cell(new_row_1based, classdate_col, str(cls.get('ClassDate', '')))
             ws.update_cell(new_row_1based, classname_col, str(cls.get('ClassName', '')))
             ws.update_cell(new_row_1based, status_col, 'Planned')
+            if dlm_col:
+                ws.update_cell(new_row_1based, dlm_col, _kyiv_now_str())
         except Exception as exc:
             logger.warning('Could not write attendance fields into new row: %s', exc)
 
@@ -498,6 +514,7 @@ def mark_attendance_statuses(class_id, attended_client_ids: list) -> bool:
         status_col = lc.index("attendancestatus")
     except ValueError:
         return False
+    dlm_col = lc.index("dlm") + 1 if "dlm" in lc else None
     attended_set = {str(cid) for cid in attended_client_ids}
     updated = False
     for idx, row in enumerate(all_values[1:], start=2):
@@ -506,6 +523,8 @@ def mark_attendance_statuses(class_id, attended_client_ids: list) -> bool:
                 and str(row[status_col]).strip().lower() == "planned"):
             new_status = "Done" if str(row[client_col]).strip() in attended_set else "NoShow"
             ws.update_cell(idx, status_col + 1, new_status)
+            if dlm_col:
+                ws.update_cell(idx, dlm_col, _kyiv_now_str())
             updated = True
     if updated:
         invalidate("2_2_Attendance")
@@ -561,12 +580,15 @@ def cancel_registration(client_id, class_id) -> tuple[bool, str]:
         status_col = lc.index('attendancestatus')
     except ValueError:
         return False, "not_found"
+    dlm_col = lc.index('dlm') + 1 if 'dlm' in lc else None
 
     # find the row with matching client and class and status Planned
     for idx, row_vals in enumerate(all_values[1:], start=2):
         try:
             if str(row_vals[client_col]).strip() == str(client_id) and str(row_vals[class_col]).strip() == str(class_id) and str(row_vals[status_col]).strip().lower() == "planned":
                 ws.update_cell(idx, status_col + 1, 'Cancelled')
+                if dlm_col:
+                    ws.update_cell(idx, dlm_col, _kyiv_now_str())
                 invalidate('2_2_Attendance', '2_1_Classes')
                 return True, ''
         except Exception:
