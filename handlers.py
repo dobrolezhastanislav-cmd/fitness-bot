@@ -161,13 +161,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == BTN_SCHEDULE:
         await _send_file_or_text(
             update, config.SCHEDULE_FILE,
-            f'Розклад тимчасово недоступний. Завітайте на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
+            f'Розклад тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
             parse_mode=ParseMode.HTML,
         )
     elif text == BTN_RULES:
         await _send_file_or_text(
             update, config.RULES_FILE,
-            f'Правила студії тимчасово недоступні. Завітайте на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
+            f'Правила студії тимчасово недоступні. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
             parse_mode=ParseMode.HTML,
         )
     elif text == BTN_INSTAGRAM:
@@ -383,8 +383,7 @@ async def cb_cancel_registration(update: Update, context: ContextTypes.DEFAULT_T
     ok, err = sheets.cancel_registration(client["ClientID"], class_id)
     if ok:
         await query.edit_message_text(
-            f"✅ Ваш запис на *{cls_label}* скасовано. Чекаємо Вас на наступних заняттях! 🙏",
-            parse_mode=ParseMode.MARKDOWN,
+            f"✅ Твій запис на {cls_label} скасовано. Чекаємо тебе на наступних заняттях! 🙏",
         )
     elif err == "not_allowed":
         await query.edit_message_text(
@@ -411,10 +410,10 @@ async def _show_my_info(
 
     # Build the message with client info
     msg = (
-        f"👤 *Ваш профіль*\n\n"
+        f"👱‍♀️ *Твій профіль*\n\n"
         f"*Клієнт:* {last} {first}\n"
         f"*Абонемент дійсний до:* {valid_through}\n"
-        f"*Лишилося занять по абонементу:* {paid_left}\n"
+        f"*Лишилося занять:* {paid_left}\n"
         f"*Останній візит:* {last_visit}"
     )
 
