@@ -108,7 +108,7 @@ def _class_label(cls: dict) -> str:
     return f"{name} ({dt})" if dt else name
 
 
-async def _send_file_or_text(update: Update, filepath: str, fallback: str) -> None:
+async def _send_file_or_text(update: Update, filepath: str, fallback: str, parse_mode=None) -> None:
     if filepath and os.path.isfile(filepath):
         ext = os.path.splitext(filepath)[1].lower()
         with open(filepath, "rb") as f:
@@ -117,7 +117,7 @@ async def _send_file_or_text(update: Update, filepath: str, fallback: str) -> No
             else:
                 await update.message.reply_document(f)
     else:
-        await update.message.reply_text(fallback)
+        await update.message.reply_text(fallback, parse_mode=parse_mode)
 
 
 # ── First contact (UC-1) ─────────────────────────────────────────────────────
@@ -161,12 +161,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == BTN_SCHEDULE:
         await _send_file_or_text(
             update, config.SCHEDULE_FILE,
-            "Розклад тимчасово недоступний. Зверніться до тренера."
+            f'Розклад тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
+            parse_mode=ParseMode.HTML,
         )
     elif text == BTN_RULES:
         await _send_file_or_text(
             update, config.RULES_FILE,
-            "Правила студії тимчасово недоступні. Зверніться до тренера."
+            f'Правила студії тимчасово недоступні. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
+            parse_mode=ParseMode.HTML,
         )
     elif text == BTN_INSTAGRAM:
         await update.message.reply_text(
@@ -177,7 +179,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Any unrecognised message → show menu
         name = client.get("FirstName", "") if client else "Тренер"
         await update.message.reply_text(
-            f"Привіт, {name}! Оберіть дію 👇",
+            f"Привіт, {name}! Я би з радістю поспілкувався, але мене того не навчили. "
+            f"Я розумію тільки команди з кнопок. Також, май на увазі, нашу з тобою переписку Оля не бачить. "
+            f"Тому, якщо тобі щось треба - пиши їй напряму. Обери дію 👇",
             reply_markup=_main_keyboard(user_id),
         )
 
@@ -197,10 +201,9 @@ async def _handle_unknown_user(update: Update, context: ContextTypes.DEFAULT_TYP
         one_time_keyboard=True,
     )
     await update.message.reply_text(
-        "Добрий день! Схоже, Ви не являєтеся відвідувачем нашої студії. "
-        "Залиште свій номер телефону і ми з Вами зв'яжемося. 🙏\n\n"
-        "Якщо кнопка не з'являється (наприклад, у веб‑версії Telegram), \
-"  # noqa: E501
+        "Добрий день! Схоже, Ви не являєтеся відвідувачем нашої студії або у нас не зафіксований Ваш контакт. "
+        "Поділіться своїм номером телефону і ми все владнаємо. 🙏\n\n"
+        "Якщо кнопка не з'являється (наприклад, у веб‑версії Telegram), "
         "просто надішліть свій номер у відповіді.",
         reply_markup=contact_keyboard,
     )
@@ -213,7 +216,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     phone = contact.phone_number if contact else "невідомо"
 
     await update.message.reply_text(
-        "Дякуємо! Ми з Вами зв'яжемося найближчим часом. 😊",
+        "Дякую. Чекате на зворотній зв'язок від Олі 😊",
         reply_markup=ReplyKeyboardMarkup(
             [[KeyboardButton("📱 Поділитися номером телефону", request_contact=True)]],
             resize_keyboard=True,
@@ -244,7 +247,7 @@ async def _show_open_classes(update: Update, context: ContextTypes.DEFAULT_TYPE)
         classes = sheets.get_open_classes()
     except Exception as exc:
         logger.error("Sheets error: %s", exc)
-        await update.message.reply_text("⚠️ Помилка підключення до Google Sheets. Спробуйте пізніше.")
+        await update.message.reply_text("⚠️ Помилка підключення до Google Sheets. Спробуй пізніше.")
         return
 
     if not classes:
@@ -256,7 +259,7 @@ async def _show_open_classes(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for c in classes
     ]
     await update.message.reply_text(
-        "Оберіть заняття для запису:",
+        "Обери заняття для запису:",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
@@ -278,7 +281,7 @@ async def cb_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         client = sheets.get_client_by_telegram_id(user_id)
         if not client:
-            text = "⚠️ Ваш профіль не знайдено. Зверніться до тренера."
+            text = "⚠️ Інформацію про тебе не знайдено. Звернися до Олі"
             if query:
                 await query.edit_message_text(text)
             else:
@@ -298,31 +301,31 @@ async def cb_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if ok:
             formatted = _short_datetime(cls.get('ClassDate'), cls.get('ClassStart'))
             await query.edit_message_text(
-                f"✅ Ви успішно записалися на заняття:\n"
+                f"✅ Ти успішно записалася на заняття:\n"
                 f"*{cls.get('ClassName')}* ({formatted})",
                 parse_mode=ParseMode.MARKDOWN,
             )
         elif err == "already_registered":
-            await query.edit_message_text("Ви вже записані на це заняття. 😊")
+            await query.edit_message_text("Ти вже йдеш на це заняття. 😊")
         elif err == "closed":
             await query.edit_message_text(
-                "Нажаль, запис на це заняття закрився. Чекаємо Вас на наступних заняттях. 😊"
+                "Нажаль, запис на це заняття закрився. Чекаємо тебе на наступних заняттях. 😊"
             )
         elif err == "full":
             await query.edit_message_text(
-                "Нажаль, на це заняття не залишилося вільних місць. Оберіть інше заняття. 😔"
+                "Нажаль, на це заняття не залишилося вільних місць. Обери інше заняття. 😔"
             )
         else:
-            await query.edit_message_text("⚠️ Помилка запису. Спробуйте ще раз або зверніться до тренера.")
+            await query.edit_message_text("⚠️ Помилка запису. Спробуй ще раз або звернися до Олі")
 
     except Exception as exc:
         logger.exception("Error in cb_register (user=%s class=%s): %s", user_id, class_id, exc)
         # attempt to notify the user at least once
         try:
             if query and query.message:
-                await query.message.reply_text("⚠️ Сталася помилка, спробуйте ще раз.")
+                await query.message.reply_text("⚠️ Сталася помилка, спробуй ще раз.")
             elif user_id:
-                await context.bot.send_message(chat_id=user_id, text="⚠️ Сталася помилка, спробуйте ще раз.")
+                await context.bot.send_message(chat_id=user_id, text="⚠️ Сталася помилка, спробуй ще раз.")
         except Exception:
             pass
 
@@ -339,11 +342,11 @@ async def _show_planned_registrations(
         registrations = sheets.get_planned_registrations(client["ClientID"])
     except Exception as exc:
         logger.error("Sheets error: %s", exc)
-        await update.message.reply_text("⚠️ Помилка підключення. Спробуйте пізніше.")
+        await update.message.reply_text("⚠️ Помилка підключення. Спробуй пізніше.")
         return
 
     if not registrations:
-        await update.message.reply_text("Ви не записані на жодне заняття. 😊")
+        await update.message.reply_text("Ти не записана на жодне заняття. 😊")
         return
 
     buttons = [
@@ -354,7 +357,7 @@ async def _show_planned_registrations(
         for r in registrations
     ]
     await update.message.reply_text(
-        "Оберіть заняття для скасування запису:",
+        "Обери заняття для скасування запису:",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
@@ -368,7 +371,7 @@ async def cb_cancel_registration(update: Update, context: ContextTypes.DEFAULT_T
 
     client = sheets.get_client_by_telegram_id(user_id)
     if not client:
-        await query.edit_message_text("⚠️ Ваш профіль не знайдено.")
+        await query.edit_message_text("⚠️ Твій профіль не знайдено. Звернися до Олі")
         return
 
     cls = sheets.get_class_by_id(class_id)
@@ -380,15 +383,14 @@ async def cb_cancel_registration(update: Update, context: ContextTypes.DEFAULT_T
     ok, err = sheets.cancel_registration(client["ClientID"], class_id)
     if ok:
         await query.edit_message_text(
-            f"✅ Ваш запис на *{cls_label}* скасовано. Чекаємо Вас на наступних заняттях! 🙏",
-            parse_mode=ParseMode.MARKDOWN,
+            f"✅ Твій запис на {cls_label} скасовано. Чекаємо тебе на наступних заняттях! 🙏",
         )
     elif err == "not_allowed":
         await query.edit_message_text(
-            "Нажаль, скасувати запис на це заняття неможливо. 😔"
+            "Нажаль, скасувати запис на це заняття вже неможливо. 😔 Звернися до Олі, щось придумаєм ;)"
         )
     else:
-        await query.edit_message_text("⚠️ Не вдалося скасувати запис. Зверніться до тренера.")
+        await query.edit_message_text("⚠️ Не вдалося скасувати запис. Звернися до Олі")
 
 
 # ── UC-4: My info ─────────────────────────────────────────────────────────────
@@ -397,7 +399,7 @@ async def _show_my_info(
     update: Update, context: ContextTypes.DEFAULT_TYPE, client: Optional[dict]
 ) -> None:
     if not client:
-        await update.message.reply_text("⚠️ Ваш профіль не знайдено в базі студії.")
+        await update.message.reply_text("⚠️ Твій профіль не знайдено в базі студії. Звернися до Олі")
         return
 
     first = client.get("FirstName", "")
@@ -408,10 +410,10 @@ async def _show_my_info(
 
     # Build the message with client info
     msg = (
-        f"👤 *Ваш профіль*\n\n"
+        f"👱‍♀️ *Твій профіль*\n\n"
         f"*Клієнт:* {last} {first}\n"
         f"*Абонемент дійсний до:* {valid_through}\n"
-        f"*Лишилося занять по абонементу:* {paid_left}\n"
+        f"*Лишилося занять:* {paid_left}\n"
         f"*Останній візит:* {last_visit}"
     )
 
@@ -420,7 +422,7 @@ async def _show_my_info(
         planned = sheets.get_planned_registrations(client.get("ClientID", ""))
     except Exception as exc:
         logger.error("Sheets error in _show_my_info: %s", exc)
-        await update.message.reply_text("⚠️ Помилка підключення. Спробуйте пізніше.")
+        await update.message.reply_text("⚠️ Помилка підключення. Спробуй пізніше.")
         return
     if planned:
         msg += "\n\n*Заплановані заняття*\n"
@@ -460,7 +462,7 @@ async def mark_class_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         classes = sheets.get_ended_planned_classes()
     except Exception as exc:
         logger.error("mark_class_start: %s", exc)
-        await update.message.reply_text("⚠️ Помилка підключення. Спробуйте пізніше.")
+        await update.message.reply_text("⚠️ Помилка підключення. Спробуй пізніше.")
         return ConversationHandler.END
 
     if not classes:
