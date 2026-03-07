@@ -52,6 +52,7 @@ from handlers import (
     build_mark_class_conv_handler,
     cb_toggle_attendance,
     cb_save_attendance,
+    cb_class_attendees,
 )
 
 logging.basicConfig(
@@ -108,6 +109,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(cb_cancel_registration, pattern=r"^cx:"))
     app.add_handler(CallbackQueryHandler(cb_toggle_attendance, pattern=r"^mkat:"))
     app.add_handler(CallbackQueryHandler(cb_save_attendance, pattern=r"^mksave:"))
+    app.add_handler(CallbackQueryHandler(cb_class_attendees, pattern=r"^ca:"))
 
     # All other text messages (main menu buttons + fallback)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

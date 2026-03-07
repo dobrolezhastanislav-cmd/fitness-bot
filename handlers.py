@@ -63,6 +63,7 @@ BTN_RULES = "📋 Правила студії"
 BTN_INSTAGRAM = "📸 Instagram"
 BTN_BROADCAST = "📢 Розіслати повідомлення"
 BTN_MARK_CLASS = "✅ Відмітити заняття"
+BTN_CLASS_ATTENDEES = "👯‍♀️ Список учасників"
 
 CLIENT_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -78,6 +79,7 @@ COACH_KEYBOARD = ReplyKeyboardMarkup(
     [
         [BTN_BROADCAST],
         [BTN_MARK_CLASS],
+        [BTN_CLASS_ATTENDEES],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -191,6 +193,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"Наш Instagram: {config.INSTAGRAM_URL}",
             disable_web_page_preview=False,
         )
+    elif text == BTN_CLASS_ATTENDEES:
+        await _show_class_attendees_list(update, context)
     else:
         # Any unrecognised message → show menu
         name = client.get("FirstName", "") if client else "Тренер"
@@ -659,6 +663,89 @@ async def cb_save_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(
         f"✅ Відвідуваність збережена для *{class_label}*\n\n"
         f"Були присутні: {done} | Відсутні: {noshow}",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+# ── Coach: view class attendees ──────────────────────────────────────────────
+
+async def _show_class_attendees_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show coach a list of classes that have registered clients."""
+    try:
+        attendance = sheets._records("2_2_Attendance")
+    except Exception as exc:
+        logger.error("_show_class_attendees_list: %s", exc)
+        await update.message.reply_text("⚠️ Помилка підключення. Спробуй пізніше.")
+        return
+
+    planned = [a for a in attendance if str(a.get("AttendanceStatus", "")).strip().lower() == "planned"]
+    if not planned:
+        await update.message.reply_text("Немає занять із записаними клієнтами.")
+        return
+
+    # Build ordered unique class list with count
+    seen: dict = {}
+    for a in planned:
+        cid = str(a.get("ClassID", "")).strip()
+        if not cid:
+            continue
+        if cid not in seen:
+            seen[cid] = {
+                "ClassID": cid,
+                "ClassName": a.get("ClassName", "—"),
+                "ClassDate": a.get("ClassDate", ""),
+                "ClassStart": a.get("ClassStart", ""),
+                "count": 0,
+            }
+        seen[cid]["count"] += 1
+
+    buttons = [
+        [InlineKeyboardButton(
+            f"{v['ClassName']} ({_short_datetime(v['ClassDate'], v['ClassStart'])}) — {v['count']} чол.",
+            callback_data=f"ca:{v['ClassID']}",
+        )]
+        for v in seen.values()
+    ]
+    await update.message.reply_text(
+        "Оберіть заняття:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def cb_class_attendees(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show registered clients for the selected class (callback_data = 'ca:<class_id>')."""
+    query = update.callback_query
+    await query.answer()
+
+    if not config.is_coach(query.from_user.id):
+        return
+
+    class_id = query.data.split(":", 1)[1]
+
+    try:
+        rows = sheets.get_planned_attendance_rows(class_id)
+    except Exception as exc:
+        logger.error("cb_class_attendees: %s", exc)
+        await query.edit_message_text("⚠️ Помилка підключення. Спробуй пізніше.")
+        return
+
+    cls = sheets.get_class_by_id(class_id)
+    class_label = _class_label(cls) if cls else f"#{class_id}"
+
+    if not rows:
+        await query.edit_message_text(
+            f"На заняття *{class_label}* немає записаних клієнтів.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    names = [
+        str(r.get("Client", "")).strip() or f"Клієнт #{r.get('ClientID', '?')}"
+        for r in rows
+    ]
+    lines = "\n".join(f"{i + 1}. {name}" for i, name in enumerate(names))
+    await query.edit_message_text(
+        f"👯‍♀️ *{class_label}*\n\n{lines}\n\nВсього: {len(rows)}",
         parse_mode=ParseMode.MARKDOWN,
     )
 
