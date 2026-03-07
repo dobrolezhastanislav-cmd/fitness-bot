@@ -57,7 +57,7 @@ def _short_datetime(date_str: str, time_str: str) -> str:
     return f"{d} - {t}" if d or t else ""
 BTN_REGISTER = "📝 Записатися на заняття"
 BTN_CANCEL = "❌ Скасувати запис"
-BTN_MY_INFO = "👤 Мій профіль"
+BTN_MY_INFO = "👱‍♀️ Мій профіль"
 BTN_SCHEDULE = "📅 Розклад"
 BTN_RULES = "📋 Правила студії"
 BTN_INSTAGRAM = "📸 Instagram"
