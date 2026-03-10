@@ -458,15 +458,18 @@ def register_client(client: dict, cls: dict) -> tuple[bool, str]:
 
 
 def get_ended_planned_classes() -> list[dict]:
-    """Return all today's Planned classes (coach can mark at any time)."""
+    """Return all Planned classes up to and including today (coach can mark past/today)."""
     today = date.today()
     result = []
     for r in _records("2_1_Classes", force=True):
         if str(r.get("ClassStatus", "")).strip().lower() != "planned":
             continue
-        if _parse_date(str(r.get("ClassDate", ""))) != today:
+        cls_date = _parse_date(str(r.get("ClassDate", "")))
+        if cls_date is None or cls_date > today:
             continue
         result.append(r)
+    # Sort oldest first so list is chronological
+    result.sort(key=lambda r: _parse_date(str(r.get("ClassDate", ""))) or date.min)
     return result
 
 
