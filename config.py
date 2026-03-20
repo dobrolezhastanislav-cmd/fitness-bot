@@ -19,12 +19,13 @@ CREDENTIALS_PATH: str = ""
 INSTAGRAM_URL: str = "https://www.instagram.com/be_the_best_fitness_studio/"
 SCHEDULE_FILE: str = ""
 RULES_FILE: str = ""
+PRICELIST_FILE: str = ""
 TIMEZONE: str = "Europe/Kiev"
 
 
 def load_config() -> dict:
     global BOT_TOKEN, OWNER_TG_ID, COACH_TG_IDS, SPREADSHEET_ID
-    global CREDENTIALS_PATH, INSTAGRAM_URL, SCHEDULE_FILE, RULES_FILE, TIMEZONE
+    global CREDENTIALS_PATH, INSTAGRAM_URL, SCHEDULE_FILE, RULES_FILE, PRICELIST_FILE, TIMEZONE
 
     BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
     if not BOT_TOKEN:
@@ -61,6 +62,9 @@ def load_config() -> dict:
 
     rules_file = data.get("rules_file", "files/rules.pdf")
     RULES_FILE = str(BASE_DIR / rules_file)
+
+    pricelist_file = data.get("pricelist_file", "files/pricelist.jpg")
+    PRICELIST_FILE = str(BASE_DIR / pricelist_file)
 
     if not SPREADSHEET_ID or SPREADSHEET_ID == "your-google-spreadsheet-id-here":
         raise ValueError(
