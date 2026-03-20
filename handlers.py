@@ -70,7 +70,8 @@ CLIENT_KEYBOARD = ReplyKeyboardMarkup(
     [
         [BTN_REGISTER, BTN_CANCEL],
         [BTN_MY_INFO, BTN_SCHEDULE],
-        [BTN_RULES, BTN_INSTAGRAM],
+        [BTN_RULES, BTN_PRICELIST],
+        [BTN_INSTAGRAM],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -209,6 +210,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _send_file_or_text(
             update, config.RULES_FILE,
             f'Правила студії тимчасово недоступні. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
+            parse_mode=ParseMode.HTML,
+        )
+    elif text == BTN_PRICELIST:
+        await _send_file_or_text(
+            update, config.PRICELIST_FILE,
+            f'Прайс тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
             parse_mode=ParseMode.HTML,
         )
     elif text == BTN_INSTAGRAM:
