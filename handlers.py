@@ -60,6 +60,7 @@ BTN_CANCEL = "❌ Скасувати запис"
 BTN_MY_INFO = "👱‍♀️ Мій профіль"
 BTN_SCHEDULE = "📅 Розклад"
 BTN_RULES = "📋 Правила студії"
+BTN_PRICELIST = "💰 Прайс"
 BTN_INSTAGRAM = "📸 Instagram"
 BTN_BROADCAST = "📢 Розіслати повідомлення"
 BTN_MARK_CLASS = "✅ Відмітити заняття"
@@ -69,7 +70,8 @@ CLIENT_KEYBOARD = ReplyKeyboardMarkup(
     [
         [BTN_REGISTER, BTN_CANCEL],
         [BTN_MY_INFO, BTN_SCHEDULE],
-        [BTN_RULES, BTN_INSTAGRAM],
+        [BTN_RULES, BTN_PRICELIST],
+        [BTN_INSTAGRAM],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -154,6 +156,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     is_coach_user = config.is_coach(user_id)
 
     if not client and not is_coach_user:
+        # Allow unknown users to view public info without registering
+        if text == BTN_SCHEDULE:
+            await _send_file_or_text(
+                update, config.SCHEDULE_FILE,
+                f'Розклад тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        if text == BTN_RULES:
+            await _send_file_or_text(
+                update, config.RULES_FILE,
+                f'Правила студії тимчасово недоступні. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        if text == BTN_PRICELIST:
+            await _send_file_or_text(
+                update, config.PRICELIST_FILE,
+                f'Прайс тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
+                parse_mode=ParseMode.HTML,
+            )
+            return
         # If user typed a phone-like text, treat it as a manual contact share
         text = text or ""
         if text and any(ch.isdigit() for ch in text):
@@ -188,6 +212,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f'Правила студії тимчасово недоступні. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
             parse_mode=ParseMode.HTML,
         )
+    elif text == BTN_PRICELIST:
+        await _send_file_or_text(
+            update, config.PRICELIST_FILE,
+            f'Прайс тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
+            parse_mode=ParseMode.HTML,
+        )
     elif text == BTN_INSTAGRAM:
         await update.message.reply_text(
             f"Наш Instagram: {config.INSTAGRAM_URL}",
@@ -216,15 +246,20 @@ async def _handle_unknown_user(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id if update.effective_user else None
     logger.info("prompting unknown user for contact: %s", user_id)
     contact_keyboard = ReplyKeyboardMarkup(
-        [[KeyboardButton("📱 Поділитися номером телефону", request_contact=True)]],
+        [
+            [KeyboardButton("📱 Поділитися номером телефону", request_contact=True)],
+            [BTN_SCHEDULE, BTN_RULES],
+            [BTN_PRICELIST],
+        ],
         resize_keyboard=True,
-        one_time_keyboard=True,
+        one_time_keyboard=False,
     )
     await update.message.reply_text(
         "Добрий день! Схоже, Ви не являєтеся відвідувачем нашої студії або у нас не зафіксований Ваш контакт. "
         "Поділіться своїм номером телефону і ми все владнаємо. 🙏\n\n"
         "Якщо кнопка не з'являється (наприклад, у веб‑версії Telegram), "
-        "просто надішліть свій номер у відповіді.",
+        "просто надішліть свій номер у відповіді.\n\n"
+        "Поки що ви можете переглянути розклад, правила та прайс 👇",
         reply_markup=contact_keyboard,
     )
 
