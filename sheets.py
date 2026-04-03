@@ -435,6 +435,7 @@ def register_client(client: dict, cls: dict) -> tuple[bool, str]:
 
         client_col = col_idx('client') or 3
         classdate_col = col_idx('classdate') or 4
+        classstart_col = col_idx('classstart') or 5
         classname_col = col_idx('classname') or 7
         status_col = col_idx('attendancestatus') or 10
         dlm_col = col_idx('dlm')
@@ -443,6 +444,7 @@ def register_client(client: dict, cls: dict) -> tuple[bool, str]:
         try:
             ws.update_cell(new_row_1based, client_col, client_name)
             ws.update_cell(new_row_1based, classdate_col, str(cls.get('ClassDate', '')))
+            ws.update_cell(new_row_1based, classstart_col, str(cls.get('ClassStart', '')))
             ws.update_cell(new_row_1based, classname_col, str(cls.get('ClassName', '')))
             ws.update_cell(new_row_1based, status_col, 'Planned')
             if dlm_col:
