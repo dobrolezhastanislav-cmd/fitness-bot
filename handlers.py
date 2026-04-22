@@ -352,7 +352,7 @@ async def cb_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await context.bot.send_message(chat_id=user_id, text=text)
             return
 
-        ok, err = sheets.register_client(client, cls)
+        ok, err = await sheets.register_client(client, cls)
         if ok:
             formatted = _short_datetime(cls.get('ClassDate'), cls.get('ClassStart'))
             await query.edit_message_text(

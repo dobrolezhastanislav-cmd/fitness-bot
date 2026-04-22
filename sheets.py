@@ -7,6 +7,7 @@ Sheet tabs used:
   2_1_Classes    — class schedule
   2_2_Attendance — attendance / registrations
 """
+import asyncio
 import logging
 import time
 import os
@@ -33,6 +34,7 @@ _spreadsheet: Optional[gspread.Spreadsheet] = None
 _cache: dict = {}
 _cache_ts: dict = {}
 CACHE_TTL = 60  # seconds; keeps Sheet reads fast, avoids quota issues
+_register_lock = asyncio.Lock()  # prevents concurrent duplicate insertions
 
 
 # ---- Initialisation --------------------------------------------------------
@@ -128,6 +130,16 @@ _KYIV_TZ = pytz.timezone("Europe/Kiev")
 def _kyiv_now_str() -> str:
     """Return current Kyiv date-time as 'DD.MM.YYYY HH:MM:SS' for DLM column."""
     return datetime.now(_KYIV_TZ).strftime("%d.%m.%Y %H:%M:%S")
+
+
+def _col_letter(col_1based: int) -> str:
+    """Convert 1-based column number to spreadsheet letter (1→A, 27→AA, etc.)."""
+    result = ""
+    n = col_1based
+    while n > 0:
+        n, remainder = divmod(n - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
 
 
 def _parse_date(value: str) -> Optional[date]:
@@ -280,183 +292,186 @@ def is_client_registered_for_class(client_id, class_id) -> bool:
         for r in _records("2_2_Attendance")
     )
 
-def register_client(client: dict, cls: dict) -> tuple[bool, str]:
+async def register_client(client: dict, cls: dict) -> tuple[bool, str]:
     """
     Add a new Planned row to 2_2_Attendance, or reactivate a Cancelled one.
     Returns (success: bool, error_key: str).
     error_key is '' on success, 'closed', 'full', or 'already_registered' otherwise.
+
+    Holds a process-wide lock so that concurrent taps / Telegram retries cannot
+    both pass the duplicate check and insert two rows simultaneously.
     """
-    # Force-refresh both tabs so SlotsRemaining and attendance status
-    # always reflect the live sheet state, not a stale 60s cache.
-    invalidate("2_1_Classes", "2_2_Attendance")
+    async with _register_lock:
+        # Force-refresh both tabs so SlotsRemaining and attendance status
+        # always reflect the live sheet state, not a stale 60s cache.
+        invalidate("2_1_Classes", "2_2_Attendance")
 
-    # Check if client is already registered for this class
-    if is_client_registered_for_class(client["ClientID"], cls["ClassID"]):
-        return False, "already_registered"
+        # Check if client is already registered for this class
+        if is_client_registered_for_class(client["ClientID"], cls["ClassID"]):
+            return False, "already_registered"
 
-    # Re-check with fresh data
-    fresh_cls = get_class_by_id(cls["ClassID"])
-    if not fresh_cls:
-        return False, "closed"
-    if str(fresh_cls.get("ClassStatus", "")).strip().lower() != "planned":
-        return False, "closed"
-    if _parse_date(str(fresh_cls.get("ClassDate", ""))) != date.today():
-        return False, "closed"
-    cls_dt = _parse_datetime(str(fresh_cls.get("ClassDate", "")), str(fresh_cls.get("ClassStart", "")))
-    if cls_dt is None or datetime.now() >= cls_dt:
-        return False, "closed"
-    try:
-        slots = int(str(fresh_cls.get("SlotsRemaining", "0")).strip() or "0")
-    except ValueError:
-        slots = 0
-    if slots <= 0:
-        return False, "full"
+        # Re-check with fresh data
+        fresh_cls = get_class_by_id(cls["ClassID"])
+        if not fresh_cls:
+            return False, "closed"
+        if str(fresh_cls.get("ClassStatus", "")).strip().lower() != "planned":
+            return False, "closed"
+        if _parse_date(str(fresh_cls.get("ClassDate", ""))) != date.today():
+            return False, "closed"
+        cls_dt = _parse_datetime(str(fresh_cls.get("ClassDate", "")), str(fresh_cls.get("ClassStart", "")))
+        if cls_dt is None or datetime.now() >= cls_dt:
+            return False, "closed"
+        try:
+            slots = int(str(fresh_cls.get("SlotsRemaining", "0")).strip() or "0")
+        except ValueError:
+            slots = 0
+        if slots <= 0:
+            return False, "full"
 
-    # If a Cancelled row already exists for this client+class, reactivate it
-    # instead of inserting a duplicate row.
-    try:
-        ws = _sheet("2_2_Attendance")
-        all_values = ws.get_all_values()
-        if all_values:
-            headers = all_values[0]
+        # If a Cancelled row already exists for this client+class, reactivate it
+        # instead of inserting a duplicate row.
+        try:
+            ws = _sheet("2_2_Attendance")
+            all_values = ws.get_all_values()
+            if all_values:
+                headers = all_values[0]
+                lc = [h.strip().lower() for h in headers]
+                try:
+                    client_col = lc.index('clientid')
+                    class_col = lc.index('classid')
+                    status_col = lc.index('attendancestatus')
+                    for idx, row_vals in enumerate(all_values[1:], start=2):
+                        if (str(row_vals[client_col]).strip() == str(client["ClientID"])
+                                and str(row_vals[class_col]).strip() == str(cls["ClassID"])
+                                and str(row_vals[status_col]).strip().lower() == "cancelled"):
+                            updates = [[_kyiv_now_str()]] if "dlm" in lc else None
+                            ws.update_cell(idx, status_col + 1, "Planned")
+                            if updates:
+                                ws.update_cell(idx, lc.index("dlm") + 1, _kyiv_now_str())
+                            invalidate("2_2_Attendance", "2_1_Classes")
+                            return True, ""
+                except ValueError:
+                    pass  # headers not found — fall through to insert
+        except Exception as exc:
+            logger.warning("Could not check for cancelled registration: %s", exc)
+
+        # use precomputed "LastName FirstName" field if available; else combine
+        client_name = str(client.get('LastName FirstName') or
+                          f"{client.get('LastName', '')} {client.get('FirstName', '')}").strip()
+
+        try:
+            ws = _sheet("2_2_Attendance")
+
+            # get current values and sheet metadata
+            all_values = ws.get_all_values()
+            headers = all_values[0] if all_values else []
+            row_count = len(all_values)
+            col_count = max(len(headers), 11, ws.col_count or 0)
+
             lc = [h.strip().lower() for h in headers]
-            try:
-                client_col = lc.index('clientid')
-                class_col = lc.index('classid')
-                status_col = lc.index('attendancestatus')
-                for idx, row_vals in enumerate(all_values[1:], start=2):
-                    if (str(row_vals[client_col]).strip() == str(client["ClientID"])
-                            and str(row_vals[class_col]).strip() == str(cls["ClassID"])
-                            and str(row_vals[status_col]).strip().lower() == "cancelled"):
-                        ws.update_cell(idx, status_col + 1, "Planned")
-                        try:
-                            dlm_col = lc.index("dlm") + 1
-                            ws.update_cell(idx, dlm_col, _kyiv_now_str())
-                        except (ValueError, Exception):
-                            pass
-                        invalidate("2_2_Attendance", "2_1_Classes")
-                        return True, ""
-            except ValueError:
-                pass  # headers not found — fall through to insert
-    except Exception as exc:
-        logger.warning("Could not check for cancelled registration: %s", exc)
 
-    # Build the row to append. According to the project spec, only a handful
-    # of columns are considered "user input" – the bot should write the client
-    # name, date, class name and the attendance status. Everything else in the
-    # `2_2_Attendance` tab is derived by formulas (client/class IDs, start/end
-    # times, slots remaining, etc.), so we deliberately leave those cells empty
-    # and let the sheet compute them.
-    # use precomputed "LastName FirstName" field if available; else combine
-    client_name = str(client.get('LastName FirstName') or
-                      f"{client.get('LastName', '')} {client.get('FirstName', '')}").strip()
-    # columns: ClientID, ClassID, Client, ClassDate, ClassStart, ClassEnd,
-    # ClassName, ClassStatus, SlotsRemaining, AttendanceStatus, Notes
-    row = [
-        "",                              # ClientID (formula)
-        "",                              # ClassID (formula)
-        client_name,                      # Client
-        str(cls.get("ClassDate", "")), # ClassDate
-        "",                              # ClassStart (formula)
-        "",                              # ClassEnd (formula)
-        str(cls.get("ClassName", "")), # ClassName
-        "",                              # ClassStatus (formula)
-        "",                              # SlotsRemaining (formula)
-        "Planned",                       # AttendanceStatus
-        "",                              # Notes
-    ]
-    try:
-        ws = _sheet("2_2_Attendance")
+            def col_idx(name: str) -> Optional[int]:
+                try:
+                    return lc.index(name) + 1
+                except ValueError:
+                    return None
 
-        # get current values and sheet metadata
-        all_values = ws.get_all_values()
-        headers = all_values[0] if all_values else []
-        row_count = len(all_values)
-        col_count = max(len(headers), len(row), ws.col_count or 0)
+            client_col = col_idx('client') or 3
+            classdate_col = col_idx('classdate') or 4
+            classstart_col = col_idx('classstart') or 5
+            classname_col = col_idx('classname') or 7
+            status_col = col_idx('attendancestatus') or 10
+            dlm_col = col_idx('dlm')
 
-        sheet_id = ws._properties.get('sheetId') if ws._properties else None
-        if not sheet_id:
-            # fallback to simple append if sheetId not available
-            ws.append_row(row, value_input_option="USER_ENTERED")
-            invalidate("2_2_Attendance", "2_1_Classes")
-            return True, ""
+            sheet_id = ws._properties.get('sheetId') if ws._properties else None
+            if not sheet_id:
+                # fallback to simple append if sheetId not available
+                ws.append_row(
+                    ["", "", client_name, str(cls.get("ClassDate", "")), "", "",
+                     str(cls.get("ClassName", "")), "", "", "Planned", ""],
+                    value_input_option="USER_ENTERED",
+                )
+                invalidate("2_2_Attendance", "2_1_Classes")
+                return True, ""
 
-        # Insert a new row inside the sheet at the end of current data (this
-        # ensures the sheet's table/range expands correctly), then copy the
-        # previous row (formulas & formatting) into the inserted row.
-        insert_idx = row_count  # zero-based index where to insert
-        requests = []
-        requests.append({
-            'insertDimension': {
-                'range': {
-                    'sheetId': sheet_id,
-                    'dimension': 'ROWS',
-                    'startIndex': insert_idx,
-                    'endIndex': insert_idx + 1,
-                },
-                'inheritFromBefore': True,
-            }
-        })
-
-        # copy previous row into the new row
-        if row_count >= 1:
-            prev_row_idx = row_count - 1
-            requests.append({
-                'copyPaste': {
-                    'source': {
-                        'sheetId': sheet_id,
-                        'startRowIndex': prev_row_idx,
-                        'endRowIndex': prev_row_idx + 1,
-                        'startColumnIndex': 0,
-                        'endColumnIndex': col_count,
-                    },
-                    'destination': {
-                        'sheetId': sheet_id,
-                        'startRowIndex': insert_idx,
-                        'endRowIndex': insert_idx + 1,
-                        'startColumnIndex': 0,
-                        'endColumnIndex': col_count,
-                    },
-                    'pasteType': 'PASTE_NORMAL',
-                    'pasteOrientation': 'NORMAL',
+            # Insert a new row inside the sheet at the end of current data (this
+            # ensures the sheet's table/range expands correctly), then copy the
+            # previous row (formulas & formatting) into the inserted row.
+            insert_idx = row_count  # zero-based index where to insert
+            batch_requests = [
+                {
+                    'insertDimension': {
+                        'range': {
+                            'sheetId': sheet_id,
+                            'dimension': 'ROWS',
+                            'startIndex': insert_idx,
+                            'endIndex': insert_idx + 1,
+                        },
+                        'inheritFromBefore': True,
+                    }
                 }
+            ]
+
+            if row_count >= 1:
+                prev_row_idx = row_count - 1
+                batch_requests.append({
+                    'copyPaste': {
+                        'source': {
+                            'sheetId': sheet_id,
+                            'startRowIndex': prev_row_idx,
+                            'endRowIndex': prev_row_idx + 1,
+                            'startColumnIndex': 0,
+                            'endColumnIndex': col_count,
+                        },
+                        'destination': {
+                            'sheetId': sheet_id,
+                            'startRowIndex': insert_idx,
+                            'endRowIndex': insert_idx + 1,
+                            'startColumnIndex': 0,
+                            'endColumnIndex': col_count,
+                        },
+                        'pasteType': 'PASTE_NORMAL',
+                        'pasteOrientation': 'NORMAL',
+                    }
+                })
+
+            ws.spreadsheet.batch_update({'requests': batch_requests})
+
+            # Write all user-controlled fields in one batch_update call so a
+            # partial failure cannot leave the row with another client's data.
+            new_row_1based = insert_idx + 1
+            range_updates = []
+
+            def _cell_range(col_1based: int) -> str:
+                col_letter = _col_letter(col_1based)
+                return f"2_2_Attendance!{col_letter}{new_row_1based}"
+
+            cell_writes = [
+                (client_col,    client_name),
+                (classdate_col, str(cls.get('ClassDate', ''))),
+                (classstart_col, str(cls.get('ClassStart', ''))),
+                (classname_col, str(cls.get('ClassName', ''))),
+                (status_col,    'Planned'),
+            ]
+            if dlm_col:
+                cell_writes.append((dlm_col, _kyiv_now_str()))
+
+            for col_1based, value in cell_writes:
+                range_updates.append({
+                    'range': _cell_range(col_1based),
+                    'values': [[value]],
+                })
+
+            ws.spreadsheet.values_batch_update({
+                'valueInputOption': 'USER_ENTERED',
+                'data': range_updates,
             })
 
-        ws.spreadsheet.batch_update({'requests': requests})
-
-        # Now write only the fields we control into the newly inserted row
-        # Locate header indices for the target columns
-        lc = [h.strip().lower() for h in headers]
-        def col_idx(name):
-            try:
-                return lc.index(name) + 1
-            except ValueError:
-                return None
-
-        client_col = col_idx('client') or 3
-        classdate_col = col_idx('classdate') or 4
-        classstart_col = col_idx('classstart') or 5
-        classname_col = col_idx('classname') or 7
-        status_col = col_idx('attendancestatus') or 10
-        dlm_col = col_idx('dlm')
-
-        new_row_1based = insert_idx + 1
-        try:
-            ws.update_cell(new_row_1based, client_col, client_name)
-            ws.update_cell(new_row_1based, classdate_col, str(cls.get('ClassDate', '')))
-            ws.update_cell(new_row_1based, classstart_col, str(cls.get('ClassStart', '')))
-            ws.update_cell(new_row_1based, classname_col, str(cls.get('ClassName', '')))
-            ws.update_cell(new_row_1based, status_col, 'Planned')
-            if dlm_col:
-                ws.update_cell(new_row_1based, dlm_col, _kyiv_now_str())
+            invalidate("2_2_Attendance", "2_1_Classes")
+            return True, ""
         except Exception as exc:
-            logger.warning('Could not write attendance fields into new row: %s', exc)
-
-        invalidate("2_2_Attendance", "2_1_Classes")
-        return True, ""
-    except Exception as exc:
-        logger.error("Error registering client: %s", exc)
-        return False, "error"
+            logger.error("Error registering client: %s", exc)
+            return False, "error"
 
 
 def get_ended_planned_classes() -> list[dict]:
