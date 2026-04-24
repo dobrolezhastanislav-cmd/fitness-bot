@@ -124,13 +124,24 @@ async def _send_file_or_text(update: Update, filepath: str, fallback: str, parse
         await update.message.reply_text(fallback, parse_mode=parse_mode)
 
 
+def _subscription_lines(summary: Optional[dict]) -> str:
+    """Format subscription info for appending to confirmation messages."""
+    if not summary:
+        return ""
+    return (
+        f"\n\nЛишилося оплачених занять: {summary['remaining']}\n"
+        f"Абонемент дійсний до: {summary['valid_to']}"
+    )
+
+
 # ── TEMP: Coach notifications on client registration/cancellation ────────────
 # To remove: delete this function + the 2 lines that call it in cb_register and cb_cancel_registration
 
-async def _notify_coaches(context, client: dict, cls: dict, action: str) -> None:
+async def _notify_coaches(context, client: dict, cls: dict, action: str, sub_lines: str = "") -> None:
     client_name = f"{client.get('FirstName', '')} {client.get('LastName', '')}".strip() or "Клієнт"
     class_label = f"{cls.get('ClassName', '—')} ({_short_datetime(cls.get('ClassDate', ''), cls.get('ClassStart', ''))})" if cls else "—"
     text = f"📝 {client_name} записалася на {class_label}" if action == "register" else f"❌ {client_name} скасувала запис на {class_label}"
+    text += sub_lines
     for coach_id in config.COACH_TG_IDS:
         try:
             await context.bot.send_message(chat_id=coach_id, text=text)
@@ -355,12 +366,15 @@ async def cb_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         ok, err = await sheets.register_client(client, cls)
         if ok:
             formatted = _short_datetime(cls.get('ClassDate'), cls.get('ClassStart'))
+            sub = sheets.get_subscription_summary(client["ClientID"], for_registration=True)
+            sub_lines = _subscription_lines(sub)
             await query.edit_message_text(
                 f"✅ Ти успішно записалася на заняття:\n"
-                f"*{cls.get('ClassName')}* ({formatted})",
+                f"*{cls.get('ClassName')}* ({formatted})"
+                + sub_lines,
                 parse_mode=ParseMode.MARKDOWN,
             )
-            await _notify_coaches(context, client, cls, "register")  # TEMP
+            await _notify_coaches(context, client, cls, "register", sub_lines)  # TEMP
         elif err == "already_registered":
             await query.edit_message_text("Ти вже йдеш на це заняття. 😊")
         elif err == "closed":
@@ -438,10 +452,13 @@ async def cb_cancel_registration(update: Update, context: ContextTypes.DEFAULT_T
 
     ok, err = sheets.cancel_registration(client["ClientID"], class_id)
     if ok:
+        sub = sheets.get_subscription_summary(client["ClientID"])
+        sub_lines = _subscription_lines(sub)
         await query.edit_message_text(
-            f"✅ Твій запис на {cls_label} скасовано. Чекаємо тебе на наступних заняттях! 🙏",
+            f"✅ Твій запис на {cls_label} скасовано. Чекаємо тебе на наступних заняттях! 🙏"
+            + sub_lines,
         )
-        await _notify_coaches(context, client, cls, "cancel")  # TEMP
+        await _notify_coaches(context, client, cls, "cancel", sub_lines)  # TEMP
     elif err == "not_allowed":
         await query.edit_message_text(
             "Нажаль, скасувати запис на це заняття вже неможливо. 😔 Звернися до Олі, щось придумаєм ;)"

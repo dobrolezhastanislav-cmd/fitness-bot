@@ -572,6 +572,61 @@ def set_cancellation_notes(class_id, reason: str) -> bool:
     return False
 
 
+def get_subscription_summary(client_id, for_registration: bool = False) -> Optional[dict]:
+    """Return subscription display info {'remaining': str, 'valid_to': str} or None.
+
+    Scope: rows in 1_2_Subscriptions where IsCurrentlyValid is 'valid' or 'not yet'
+    and ClientID matches.
+
+    If any row has Remaining == 'безліміт': find the row with the newest ValidTo in
+    scope and return its Remaining value as-is (no arithmetic).
+    Otherwise: sum all numeric Remaining values; if for_registration subtract 1.
+
+    ValidTo: newest ValidTo in scope. Append '(ще не активний)' if that row is 'not yet'.
+    """
+    try:
+        rows = [
+            r for r in _records("1_2_Subscriptions")
+            if str(r.get("ClientID", "")).strip() == str(client_id)
+            and str(r.get("IsCurrentlyValid", "")).strip().lower() in ("valid", "not yet")
+        ]
+    except Exception as exc:
+        logger.warning("Could not read 1_2_Subscriptions: %s", exc)
+        return None
+
+    if not rows:
+        return None
+
+    def _valid_to_date(r):
+        return _parse_date(str(r.get("ValidTo", ""))) or date.min
+
+    newest_row = max(rows, key=_valid_to_date)
+    vd = _valid_to_date(newest_row)
+    valid_to_str = vd.strftime("%d.%m.%Y") if vd != date.min else "—"
+    if str(newest_row.get("IsCurrentlyValid", "")).strip().lower() == "not yet":
+        valid_to_str += " (ще не активний)"
+
+    has_unlimited = any(
+        str(r.get("Remaining", "")).strip().lower() == "безліміт"
+        for r in rows
+    )
+
+    if has_unlimited:
+        remaining_str = str(newest_row.get("Remaining", "безліміт")).strip()
+    else:
+        total = 0
+        for r in rows:
+            try:
+                total += int(str(r.get("Remaining", "0")).strip() or "0")
+            except ValueError:
+                pass
+        if for_registration:
+            total -= 1
+        remaining_str = str(total)
+
+    return {"remaining": remaining_str, "valid_to": valid_to_str}
+
+
 def cancel_registration(client_id, class_id) -> tuple[bool, str]:
     """
     Set AttendanceStatus to 'Cancelled' for a Planned row.
