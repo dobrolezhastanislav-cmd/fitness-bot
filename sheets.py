@@ -572,6 +572,76 @@ def set_cancellation_notes(class_id, reason: str) -> bool:
     return False
 
 
+def get_subscription_summary(client_id, for_registration: bool = False) -> Optional[dict]:
+    """Return {'remaining': str, 'valid_to': str} for the subscription to display, or None.
+
+    Priority:
+      1. valid rows exist and have Remaining > 0 (or text) → show valid group
+      2. valid rows exist but Remaining = 0 → return None (exhausted, show nothing)
+      3. no valid rows, not-yet rows exist → show not-yet group
+      4. no rows → None
+    """
+    try:
+        rows = [
+            r for r in _records("1_2_Subscriptions")
+            if str(r.get("ClientID", "")).strip() == str(client_id)
+            and str(r.get("IsCurrentlyValid", "")).strip().lower() in ("valid", "not yet")
+        ]
+    except Exception as exc:
+        logger.warning("Could not read 1_2_Subscriptions: %s", exc)
+        return None
+    if not rows:
+        return None
+
+    def _vd(r):
+        return _parse_date(str(r.get("ValidTo", ""))) or date.min
+
+    def _date_str(r):
+        d = _vd(r)
+        return d.strftime("%d.%m.%Y") if d != date.min else "—"
+
+    def _is_text(r) -> bool:
+        val = str(r.get("Remaining", "")).strip()
+        if not val:
+            return False
+        try:
+            int(val)
+            return False
+        except (ValueError, TypeError):
+            return True
+
+    def _numeric_total(group) -> int:
+        total = 0
+        for r in group:
+            try:
+                total += int(str(r.get("Remaining", "0")).strip() or "0")
+            except ValueError:
+                pass
+        return total
+
+    def _build(group_rows, subtract: bool) -> dict:
+        newest = max(group_rows, key=_vd)
+        if any(_is_text(r) for r in group_rows):
+            return {'remaining': str(newest.get("Remaining", "")).strip(), 'valid_to': _date_str(newest)}
+        total = _numeric_total(group_rows)
+        if subtract:
+            total -= 1
+        return {'remaining': str(total), 'valid_to': _date_str(newest)}
+
+    valid_rows = [r for r in rows if str(r.get("IsCurrentlyValid", "")).strip().lower() == "valid"]
+    not_yet_rows = [r for r in rows if str(r.get("IsCurrentlyValid", "")).strip().lower() == "not yet"]
+
+    if valid_rows:
+        if any(_is_text(r) for r in valid_rows) or _numeric_total(valid_rows) > 0:
+            return _build(valid_rows, subtract=for_registration)
+        return None  # valid exists but fully exhausted — show nothing
+
+    if not_yet_rows:
+        return _build(not_yet_rows, subtract=for_registration)
+
+    return None
+
+
 def cancel_registration(client_id, class_id) -> tuple[bool, str]:
     """
     Set AttendanceStatus to 'Cancelled' for a Planned row.
