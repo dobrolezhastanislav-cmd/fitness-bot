@@ -128,33 +128,9 @@ def _subscription_lines(summary: Optional[dict]) -> str:
     """Format subscription info for appending to confirmation messages."""
     if not summary:
         return ""
-    valid = summary.get('valid')
-    not_yet = summary.get('not_yet')
-    if not valid and not not_yet:
-        return ""
-    if valid and not not_yet:
-        return (
-            f"\n\nЛишилося оплачених занять: {valid['remaining']}\n"
-            f"Абонемент дійсний до: {valid['valid_to']}"
-        )
-    if not valid and not_yet:
-        return (
-            f"\n\nЛишилося оплачених занять: {not_yet['remaining']}\n"
-            f"Абонемент дійсний до: {not_yet['valid_to']}"
-        )
-    # Both groups present (at least one has text Remaining)
-    if valid.get('is_text'):
-        # Current subscription is unlimited, upcoming is numeric
-        return (
-            f"\n\nПоточний абонемент: {valid['remaining']}, діє до {valid['valid_to']}\n"
-            f"Наступний абонемент діє до {not_yet['valid_to']}.\n"
-            f"Оплачених занять: {not_yet['remaining']}"
-        )
-    # Current is numeric, upcoming is unlimited
     return (
-        f"\n\nЛишилося оплачених занять: {valid['remaining']}\n"
-        f"Абонемент дійсний до: {valid['valid_to']}\n"
-        f"Наступний абонемент: {not_yet['remaining']}. Діє до {not_yet['valid_to']}"
+        f"\n\nЛишилося оплачених занять: {summary['remaining']}\n"
+        f"Абонемент дійсний до: {summary['valid_to']}"
     )
 
 

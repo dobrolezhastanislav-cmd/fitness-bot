@@ -573,14 +573,13 @@ def set_cancellation_notes(class_id, reason: str) -> bool:
 
 
 def get_subscription_summary(client_id, for_registration: bool = False) -> Optional[dict]:
-    """Return subscription display info or None if no active/upcoming subscriptions.
+    """Return {'remaining': str, 'valid_to': str} for the subscription to display, or None.
 
-    Returns {'valid': group_info | None, 'not_yet': group_info | None}
-    where group_info = {'remaining': str, 'valid_to': str, 'is_text': bool}.
-
-    When all Remaining values are numeric both groups are merged into 'valid'
-    (summed Remaining, newest ValidTo); 'not_yet' is None.
-    When any Remaining is non-numeric the groups are kept separate.
+    Priority:
+      1. valid rows exist and have Remaining > 0 (or text) → show valid group
+      2. valid rows exist but Remaining = 0 → return None (exhausted, show nothing)
+      3. no valid rows, not-yet rows exist → show not-yet group
+      4. no rows → None
     """
     try:
         rows = [
@@ -620,40 +619,27 @@ def get_subscription_summary(client_id, for_registration: bool = False) -> Optio
                 pass
         return total
 
-    def _group_info(group_rows) -> Optional[dict]:
-        if not group_rows:
-            return None
+    def _build(group_rows, subtract: bool) -> dict:
         newest = max(group_rows, key=_vd)
         if any(_is_text(r) for r in group_rows):
-            return {'remaining': str(newest.get("Remaining", "")).strip(),
-                    'valid_to': _date_str(newest), 'is_text': True}
-        return {'remaining': str(_numeric_total(group_rows)),
-                'valid_to': _date_str(newest), 'is_text': False}
-
-    if not any(_is_text(r) for r in rows):
-        # All numeric: merge into a single display block
-        total = _numeric_total(rows)
-        if for_registration:
+            return {'remaining': str(newest.get("Remaining", "")).strip(), 'valid_to': _date_str(newest)}
+        total = _numeric_total(group_rows)
+        if subtract:
             total -= 1
-        return {
-            'valid': {'remaining': str(total), 'valid_to': _date_str(max(rows, key=_vd)), 'is_text': False},
-            'not_yet': None,
-        }
+        return {'remaining': str(total), 'valid_to': _date_str(newest)}
 
-    # At least one text Remaining: keep groups separate
     valid_rows = [r for r in rows if str(r.get("IsCurrentlyValid", "")).strip().lower() == "valid"]
     not_yet_rows = [r for r in rows if str(r.get("IsCurrentlyValid", "")).strip().lower() == "not yet"]
 
-    valid_info = _group_info(valid_rows)
-    not_yet_info = _group_info(not_yet_rows)
+    if valid_rows:
+        if any(_is_text(r) for r in valid_rows) or _numeric_total(valid_rows) > 0:
+            return _build(valid_rows, subtract=for_registration)
+        return None  # valid exists but fully exhausted — show nothing
 
-    if for_registration:
-        if valid_info and not valid_info['is_text'] and int(valid_info['remaining']) > 0:
-            valid_info['remaining'] = str(int(valid_info['remaining']) - 1)
-        elif not_yet_info and not not_yet_info['is_text']:
-            not_yet_info['remaining'] = str(int(not_yet_info['remaining']) - 1)
+    if not_yet_rows:
+        return _build(not_yet_rows, subtract=for_registration)
 
-    return {'valid': valid_info, 'not_yet': not_yet_info}
+    return None
 
 
 def cancel_registration(client_id, class_id) -> tuple[bool, str]:
