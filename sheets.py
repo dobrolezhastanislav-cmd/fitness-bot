@@ -573,16 +573,14 @@ def set_cancellation_notes(class_id, reason: str) -> bool:
 
 
 def get_subscription_summary(client_id, for_registration: bool = False) -> Optional[dict]:
-    """Return subscription display info {'remaining': str, 'valid_to': str} or None.
+    """Return subscription display info or None if no active/upcoming subscriptions.
 
-    Scope: rows in 1_2_Subscriptions where IsCurrentlyValid is 'valid' or 'not yet'
-    and ClientID matches.
+    Returns {'valid': group_info | None, 'not_yet': group_info | None}
+    where group_info = {'remaining': str, 'valid_to': str, 'is_text': bool}.
 
-    If any row has Remaining == 'безліміт': find the row with the newest ValidTo in
-    scope and return its Remaining value as-is (no arithmetic).
-    Otherwise: sum all numeric Remaining values; if for_registration subtract 1.
-
-    ValidTo: newest ValidTo in scope. Append '(ще не активний)' if that row is 'not yet'.
+    When all Remaining values are numeric both groups are merged into 'valid'
+    (summed Remaining, newest ValidTo); 'not_yet' is None.
+    When any Remaining is non-numeric the groups are kept separate.
     """
     try:
         rows = [
@@ -593,46 +591,69 @@ def get_subscription_summary(client_id, for_registration: bool = False) -> Optio
     except Exception as exc:
         logger.warning("Could not read 1_2_Subscriptions: %s", exc)
         return None
-
     if not rows:
         return None
 
-    def _valid_to_date(r):
+    def _vd(r):
         return _parse_date(str(r.get("ValidTo", ""))) or date.min
 
-    newest_row = max(rows, key=_valid_to_date)
-    vd = _valid_to_date(newest_row)
-    valid_to_str = vd.strftime("%d.%m.%Y") if vd != date.min else "—"
-    if str(newest_row.get("IsCurrentlyValid", "")).strip().lower() == "not yet":
-        valid_to_str += " (ще не активний)"
+    def _date_str(r):
+        d = _vd(r)
+        return d.strftime("%d.%m.%Y") if d != date.min else "—"
 
-    def _is_numeric(r) -> bool:
-        try:
-            int(str(r.get("Remaining", "")).strip())
-            return True
-        except (ValueError, TypeError):
+    def _is_text(r) -> bool:
+        val = str(r.get("Remaining", "")).strip()
+        if not val:
             return False
+        try:
+            int(val)
+            return False
+        except (ValueError, TypeError):
+            return True
 
-    has_text_remaining = any(
-        str(r.get("Remaining", "")).strip() and not _is_numeric(r)
-        for r in rows
-    )
-
-    if has_text_remaining:
-        # Non-numeric Remaining (e.g. "безліміт") — show the newest-ValidTo row's value as-is
-        remaining_str = str(newest_row.get("Remaining", "")).strip()
-    else:
+    def _numeric_total(group) -> int:
         total = 0
-        for r in rows:
+        for r in group:
             try:
                 total += int(str(r.get("Remaining", "0")).strip() or "0")
             except ValueError:
                 pass
+        return total
+
+    def _group_info(group_rows) -> Optional[dict]:
+        if not group_rows:
+            return None
+        newest = max(group_rows, key=_vd)
+        if any(_is_text(r) for r in group_rows):
+            return {'remaining': str(newest.get("Remaining", "")).strip(),
+                    'valid_to': _date_str(newest), 'is_text': True}
+        return {'remaining': str(_numeric_total(group_rows)),
+                'valid_to': _date_str(newest), 'is_text': False}
+
+    if not any(_is_text(r) for r in rows):
+        # All numeric: merge into a single display block
+        total = _numeric_total(rows)
         if for_registration:
             total -= 1
-        remaining_str = str(total)
+        return {
+            'valid': {'remaining': str(total), 'valid_to': _date_str(max(rows, key=_vd)), 'is_text': False},
+            'not_yet': None,
+        }
 
-    return {"remaining": remaining_str, "valid_to": valid_to_str}
+    # At least one text Remaining: keep groups separate
+    valid_rows = [r for r in rows if str(r.get("IsCurrentlyValid", "")).strip().lower() == "valid"]
+    not_yet_rows = [r for r in rows if str(r.get("IsCurrentlyValid", "")).strip().lower() == "not yet"]
+
+    valid_info = _group_info(valid_rows)
+    not_yet_info = _group_info(not_yet_rows)
+
+    if for_registration:
+        if valid_info and not valid_info['is_text'] and int(valid_info['remaining']) > 0:
+            valid_info['remaining'] = str(int(valid_info['remaining']) - 1)
+        elif not_yet_info and not not_yet_info['is_text']:
+            not_yet_info['remaining'] = str(int(not_yet_info['remaining']) - 1)
+
+    return {'valid': valid_info, 'not_yet': not_yet_info}
 
 
 def cancel_registration(client_id, class_id) -> tuple[bool, str]:
