@@ -606,13 +606,21 @@ def get_subscription_summary(client_id, for_registration: bool = False) -> Optio
     if str(newest_row.get("IsCurrentlyValid", "")).strip().lower() == "not yet":
         valid_to_str += " (ще не активний)"
 
-    has_unlimited = any(
-        str(r.get("Remaining", "")).strip().lower() == "безліміт"
+    def _is_numeric(r) -> bool:
+        try:
+            int(str(r.get("Remaining", "")).strip())
+            return True
+        except (ValueError, TypeError):
+            return False
+
+    has_text_remaining = any(
+        str(r.get("Remaining", "")).strip() and not _is_numeric(r)
         for r in rows
     )
 
-    if has_unlimited:
-        remaining_str = str(newest_row.get("Remaining", "безліміт")).strip()
+    if has_text_remaining:
+        # Non-numeric Remaining (e.g. "безліміт") — show the newest-ValidTo row's value as-is
+        remaining_str = str(newest_row.get("Remaining", "")).strip()
     else:
         total = 0
         for r in rows:
