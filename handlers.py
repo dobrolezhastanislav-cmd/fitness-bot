@@ -124,12 +124,12 @@ async def _send_file_or_text(update: Update, filepath: str, fallback: str, parse
         await update.message.reply_text(fallback, parse_mode=parse_mode)
 
 
-def _subscription_lines(summary: Optional[dict]) -> str:
+def _subscription_lines(summary: Optional[dict], label: str = "Залишок після цього заняття") -> str:
     """Format subscription info for appending to confirmation messages."""
     if not summary:
         return ""
     return (
-        f"\n\nЛишилося оплачених занять: {summary['remaining']}\n"
+        f"\n\n{label}: {summary['remaining']}\n"
         f"Абонемент дійсний до: {summary['valid_to']}"
     )
 
@@ -453,7 +453,7 @@ async def cb_cancel_registration(update: Update, context: ContextTypes.DEFAULT_T
     ok, err = sheets.cancel_registration(client["ClientID"], class_id)
     if ok:
         sub = sheets.get_subscription_summary(client["ClientID"])
-        sub_lines = _subscription_lines(sub)
+        sub_lines = _subscription_lines(sub, "Залишок після цього скасування")
         await query.edit_message_text(
             f"✅ Твій запис на {cls_label} скасовано. Чекаємо тебе на наступних заняттях! 🙏"
             + sub_lines,
