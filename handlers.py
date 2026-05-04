@@ -320,12 +320,24 @@ async def _show_open_classes(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("На сьогодні немає занять, доступних для запису. 😔")
         return
 
+    lines = []
+    for c in classes:
+        t = (c.get('ClassStart', '') or '')[:5]
+        try:
+            slots = int(str(c.get('SlotsRemaining', '0')).strip() or '0')
+        except ValueError:
+            slots = 0
+        lines.append(f"• {c.get('ClassName', '—')} {t} — {slots} вільних місць")
+
     buttons = [
-        [InlineKeyboardButton(_class_label(c), callback_data=f"r:{c['ClassID']}")]
+        [InlineKeyboardButton(
+            f"{c.get('ClassName', '—')} ({(c.get('ClassStart', '') or '')[:5]})",
+            callback_data=f"r:{c['ClassID']}"
+        )]
         for c in classes
     ]
     await update.message.reply_text(
-        "Обери заняття для запису:",
+        "Заняття на сьогодні:\n\n" + "\n".join(lines) + "\n\nОбери заняття 👇",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
