@@ -637,7 +637,9 @@ def get_subscription_summary(client_id, for_registration: bool = False) -> Optio
         return None  # valid exists but fully exhausted — show nothing
 
     if not_yet_rows:
-        return _build(not_yet_rows, subtract=for_registration)
+        result = _build(not_yet_rows, subtract=for_registration)
+        result['valid_to'] = "термін дії цього абонементу буде розраховано після першого заняття, відвіданого по цьому абонементу"
+        return result
 
     return None
 
