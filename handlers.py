@@ -88,7 +88,7 @@ COACH_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 # ConversationHandler states — broadcast
-COACH_SELECT_TARGET, COACH_SELECT_CLASS, COACH_TYPE_MSG, COACH_CONFIRM = range(4)
+COACH_SELECT_TARGET, COACH_SELECT_CLASS, COACH_TYPE_MSG, COACH_CONFIRM, COACH_CUSTOM_PREVIEW = range(5)
 
 # ConversationHandler states — mark class
 MARK_SELECT_CLASS, MARK_RAN_OR_NOT, MARK_CANCEL_REASON = range(10, 13)
@@ -825,6 +825,7 @@ async def coach_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     buttons = [
         [InlineKeyboardButton("👥 Всім клієнтам", callback_data="ct:all")],
         [InlineKeyboardButton("🏋️ Клієнтам конкретного заняття", callback_data="ct:class")],
+        [InlineKeyboardButton("🎯 Обраним клієнтам", callback_data="ct:custom")],
     ]
     await update.message.reply_text(
         "Кому надіслати повідомлення?",
@@ -842,6 +843,43 @@ async def coach_select_target(update: Update, context: ContextTypes.DEFAULT_TYPE
     if target == "all":
         await query.edit_message_text("Введіть текст повідомлення для всіх клієнтів:")
         return COACH_TYPE_MSG
+
+    if target == "custom":
+        sheets.invalidate("0_Clients")
+        try:
+            recipients = sheets.get_custom_group_clients()
+        except Exception as exc:
+            logger.error("Sheets error: %s", exc)
+            await query.edit_message_text("⚠️ Помилка підключення. Спробуйте ще раз.")
+            return ConversationHandler.END
+
+        if not recipients:
+            await query.edit_message_text(
+                "Немає обраних клієнтів. Позначте їх у колонці "
+                "'For direct messaging' на вкладці 0_Clients."
+            )
+            return ConversationHandler.END
+
+        context.user_data["broadcast_custom_recipients"] = recipients
+
+        def _name(c: dict) -> str:
+            n = str(c.get("LastName FirstName") or "").strip()
+            if not n:
+                n = f"{c.get('LastName', '')} {c.get('FirstName', '')}".strip()
+            return n or "—"
+
+        lines = "\n".join(f"• {_name(c)}" for c in recipients)
+        buttons = [
+            [
+                InlineKeyboardButton("✅ Продовжити", callback_data="cust:ok"),
+                InlineKeyboardButton("❌ Скасувати", callback_data="cust:no"),
+            ]
+        ]
+        await query.edit_message_text(
+            f"Обрано клієнтів: {len(recipients)}\n\n{lines}\n\nПродовжити?",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return COACH_CUSTOM_PREVIEW
 
     # Show upcoming classes
     try:
@@ -891,12 +929,26 @@ async def coach_select_class(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return COACH_TYPE_MSG
 
 
+async def coach_custom_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    action = query.data.split(":", 1)[1]
+    if action == "no":
+        await query.edit_message_text("❌ Розсилку скасовано.")
+        return ConversationHandler.END
+    await query.edit_message_text("Введіть текст повідомлення для обраних клієнтів:")
+    return COACH_TYPE_MSG
+
+
 async def coach_receive_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["broadcast_message"] = update.message.text
 
     target = context.user_data.get("broadcast_target", "all")
     if target == "all":
         recipients_desc = "всіх клієнтів"
+    elif target == "custom":
+        count = len(context.user_data.get("broadcast_custom_recipients", []))
+        recipients_desc = f"обраних клієнтів ({count})"
     else:
         recipients_desc = f"клієнтів заняття {context.user_data.get('broadcast_class_label', '')}"
 
@@ -930,6 +982,8 @@ async def coach_confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         if target == "all":
             recipients = sheets.get_all_clients_with_telegram()
+        elif target == "custom":
+            recipients = context.user_data.get("broadcast_custom_recipients", [])
         else:
             class_id = context.user_data.get("broadcast_class_id", "")
             recipients = sheets.get_attendees_for_class(class_id)
@@ -985,6 +1039,7 @@ def build_coach_conv_handler() -> ConversationHandler:
         states={
             COACH_SELECT_TARGET: [CallbackQueryHandler(coach_select_target, pattern=r"^ct:")],
             COACH_SELECT_CLASS: [CallbackQueryHandler(coach_select_class, pattern=r"^cc:")],
+            COACH_CUSTOM_PREVIEW: [CallbackQueryHandler(coach_custom_preview, pattern=r"^cust:")],
             COACH_TYPE_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, coach_receive_message)],
             COACH_CONFIRM: [CallbackQueryHandler(coach_confirm_send, pattern=r"^csend:")],
         },

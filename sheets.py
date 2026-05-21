@@ -178,11 +178,28 @@ def get_client_by_telegram_id(tg_id: int) -> Optional[dict]:
     return None
 
 
+_TRUTHY = {"yes", "true", "1", "y", "так", "✓", "✔"}
+
+
+def _is_truthy(value) -> bool:
+    return str(value).strip().lower() in _TRUTHY
+
+
 def get_all_clients_with_telegram() -> list[dict]:
-    """Return all clients that have a Telegram ID set."""
+    """Return clients that have a Telegram ID set AND Active == Yes."""
     return [
         r for r in _records("0_Clients")
         if str(r.get("UserTelegramID", "")).strip()
+        and _is_truthy(r.get("Active", ""))
+    ]
+
+
+def get_custom_group_clients() -> list[dict]:
+    """Return clients flagged in the 'For direct messaging' column with a Telegram ID."""
+    return [
+        r for r in _records("0_Clients")
+        if str(r.get("UserTelegramID", "")).strip()
+        and _is_truthy(r.get("For direct messaging", ""))
     ]
 
 
