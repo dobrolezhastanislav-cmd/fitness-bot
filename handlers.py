@@ -12,6 +12,7 @@ Coach buttons (extra):
 Conversation states (coach broadcast flow):
   COACH_SELECT_TARGET → COACH_SELECT_CLASS or COACH_TYPE_MSG → COACH_CONFIRM
 """
+import asyncio
 import logging
 import os
 import re
@@ -113,15 +114,23 @@ def _class_label(cls: dict) -> str:
 
 
 async def _send_file_or_text(update: Update, filepath: str, fallback: str, parse_mode=None) -> None:
-    if filepath and os.path.isfile(filepath):
+    await _send_files_or_text(update, [filepath] if filepath else [], fallback, parse_mode=parse_mode)
+
+
+async def _send_files_or_text(update: Update, filepaths: list, fallback: str, parse_mode=None) -> None:
+    existing = [p for p in filepaths if p and os.path.isfile(p)]
+    if not existing:
+        await update.message.reply_text(fallback, parse_mode=parse_mode)
+        return
+    for i, filepath in enumerate(existing):
+        if i > 0:
+            await asyncio.sleep(0.5)
         ext = os.path.splitext(filepath)[1].lower()
         with open(filepath, "rb") as f:
             if ext in (".jpg", ".jpeg", ".png"):
                 await update.message.reply_photo(f)
             else:
                 await update.message.reply_document(f)
-    else:
-        await update.message.reply_text(fallback, parse_mode=parse_mode)
 
 
 def _subscription_lines(summary: Optional[dict], label: str = "Залишок після цього заняття") -> str:
@@ -176,15 +185,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return
         if text == BTN_RULES:
-            await _send_file_or_text(
-                update, config.RULES_FILE,
+            await _send_files_or_text(
+                update, config.RULES_FILES,
                 f'Правила студії тимчасово недоступні. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
                 parse_mode=ParseMode.HTML,
             )
             return
         if text == BTN_PRICELIST:
-            await _send_file_or_text(
-                update, config.PRICELIST_FILE,
+            await _send_files_or_text(
+                update, config.PRICELIST_FILES,
                 f'Прайс тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
                 parse_mode=ParseMode.HTML,
             )
@@ -218,14 +227,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode=ParseMode.HTML,
         )
     elif text == BTN_RULES:
-        await _send_file_or_text(
-            update, config.RULES_FILE,
+        await _send_files_or_text(
+            update, config.RULES_FILES,
             f'Правила студії тимчасово недоступні. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
             parse_mode=ParseMode.HTML,
         )
     elif text == BTN_PRICELIST:
-        await _send_file_or_text(
-            update, config.PRICELIST_FILE,
+        await _send_files_or_text(
+            update, config.PRICELIST_FILES,
             f'Прайс тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
             parse_mode=ParseMode.HTML,
         )

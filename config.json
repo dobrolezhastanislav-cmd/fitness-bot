@@ -2,7 +2,7 @@
   "credentials_file": "credentials.json",
   "instagram_url": "https://www.instagram.com/be_the_best_fitness_studio/",
   "schedule_file": "files/schedule.jpg",
-  "rules_file": "files/rules.jpg",
-  "pricelist_file": "files/pricelist.jpg",
+  "rules_files": ["files/rules1.jpg", "files/rules2.jpg"],
+  "pricelist_files": ["files/pricelist1.jpg", "files/pricelist2.jpg"],
   "timezone": "Europe/Kiev"
 }

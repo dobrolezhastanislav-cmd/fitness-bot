@@ -18,14 +18,14 @@ SPREADSHEET_ID: str = ""
 CREDENTIALS_PATH: str = ""
 INSTAGRAM_URL: str = "https://www.instagram.com/be_the_best_fitness_studio/"
 SCHEDULE_FILE: str = ""
-RULES_FILE: str = ""
-PRICELIST_FILE: str = ""
+RULES_FILES: list = []
+PRICELIST_FILES: list = []
 TIMEZONE: str = "Europe/Kiev"
 
 
 def load_config() -> dict:
     global BOT_TOKEN, OWNER_TG_ID, COACH_TG_IDS, SPREADSHEET_ID
-    global CREDENTIALS_PATH, INSTAGRAM_URL, SCHEDULE_FILE, RULES_FILE, PRICELIST_FILE, TIMEZONE
+    global CREDENTIALS_PATH, INSTAGRAM_URL, SCHEDULE_FILE, RULES_FILES, PRICELIST_FILES, TIMEZONE
 
     BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
     if not BOT_TOKEN:
@@ -60,11 +60,14 @@ def load_config() -> dict:
     schedule_file = data.get("schedule_file", "files/schedule.pdf")
     SCHEDULE_FILE = str(BASE_DIR / schedule_file)
 
-    rules_file = data.get("rules_file", "files/rules.pdf")
-    RULES_FILE = str(BASE_DIR / rules_file)
+    def _resolve_files(key: str, default: list) -> list:
+        val = data.get(key, default)
+        if isinstance(val, str):
+            val = [val]
+        return [str(BASE_DIR / f) for f in val]
 
-    pricelist_file = data.get("pricelist_file", "files/pricelist.jpg")
-    PRICELIST_FILE = str(BASE_DIR / pricelist_file)
+    RULES_FILES = _resolve_files("rules_files", ["files/rules1.jpg", "files/rules2.jpg"])
+    PRICELIST_FILES = _resolve_files("pricelist_files", ["files/pricelist1.jpg", "files/pricelist2.jpg"])
 
     if not SPREADSHEET_ID or SPREADSHEET_ID == "your-google-spreadsheet-id-here":
         raise ValueError(
