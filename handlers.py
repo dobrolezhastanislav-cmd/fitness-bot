@@ -146,11 +146,13 @@ def _subscription_lines(summary: Optional[dict], label: str = "Залишок п
 # ── TEMP: Coach notifications on client registration/cancellation ────────────
 # To remove: delete this function + the 2 lines that call it in cb_register and cb_cancel_registration
 
-async def _notify_coaches(context, client: dict, cls: dict, action: str, sub_lines: str = "") -> None:
+async def _notify_coaches(context, client: dict, cls: dict, action: str, sub_lines: str = "", extra_note: str = "") -> None:
     client_name = f"{client.get('FirstName', '')} {client.get('LastName', '')}".strip() or "Клієнт"
     class_label = f"{cls.get('ClassName', '—')} ({_short_datetime(cls.get('ClassDate', ''), cls.get('ClassStart', ''))})" if cls else "—"
     text = f"📝 {client_name} записалася на {class_label}" if action == "register" else f"❌ {client_name} скасувала запис на {class_label}"
     text += sub_lines
+    if extra_note:
+        text += f"\n⚠️ {extra_note}"
     for coach_id in config.COACH_TG_IDS:
         try:
             await context.bot.send_message(chat_id=coach_id, text=text)
@@ -384,6 +386,21 @@ async def cb_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await context.bot.send_message(chat_id=user_id, text=text)
             return
 
+        # TRX upsell warning: client has групові-only subscription
+        if "trx" in str(cls.get("ClassName", "")).lower():
+            trx_status = sheets.get_trx_subscription_status(client["ClientID"])
+            if trx_status == "groups_only":
+                await query.edit_message_text(
+                    "Ваш поточний абонемент не передбачає відвідування TRX. "
+                    "За це заняття слід буде оплатити як за разове TRX — 350 грн. під час відвідування. "
+                    "Підтвердити запис?",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ Підтвердити", callback_data=f"trx_confirm:{class_id}")],
+                        [InlineKeyboardButton("❌ Скасувати", callback_data="trx_cancel")],
+                    ]),
+                )
+                return
+
         ok, err = await sheets.register_client(client, cls)
         if ok:
             formatted = _short_datetime(cls.get('ClassDate'), cls.get('ClassStart'))
@@ -419,6 +436,76 @@ async def cb_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await context.bot.send_message(chat_id=user_id, text="⚠️ Сталася помилка, спробуй ще раз.")
         except Exception:
             pass
+
+
+# ── TRX upsell confirm/cancel callbacks ─────────────────────────────────────
+
+async def cb_trx_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback: user confirmed registration for a TRX class without TRX subscription."""
+    query = update.callback_query
+    user_id = getattr(query.from_user, "id", None) if query else None
+    class_id = query.data.split(":", 1)[1] if query and query.data else None
+
+    try:
+        await query.answer()
+
+        client = sheets.get_client_by_telegram_id(user_id)
+        if not client:
+            await query.edit_message_text("⚠️ Інформацію про тебе не знайдено. Звернися до Олі")
+            return
+
+        cls = sheets.get_class_by_id(class_id)
+        if not cls:
+            await query.edit_message_text("Заняття не знайдено.")
+            return
+
+        ok, err = await sheets.register_client(client, cls)
+        if ok:
+            formatted = _short_datetime(cls.get("ClassDate"), cls.get("ClassStart"))
+            sub = sheets.get_subscription_summary(client["ClientID"], for_registration=True)
+            sub_lines = _subscription_lines(sub)
+            await query.edit_message_text(
+                f"✅ Ти успішно записалася на заняття:\n"
+                f"*{cls.get('ClassName')}* ({formatted})"
+                + sub_lines,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            await _notify_coaches(  # TEMP
+                context, client, cls, "register", sub_lines,
+                extra_note="TRX не включений в абонемент. Взяти 350 грн як за разове",
+            )
+        elif err == "already_registered":
+            await query.edit_message_text("Ти вже йдеш на це заняття. 😊")
+        elif err == "closed":
+            await query.edit_message_text(
+                "Нажаль, запис на це заняття закрився. Чекаємо тебе на наступних заняттях. 😊"
+            )
+        elif err == "full":
+            await query.edit_message_text(
+                "Нажаль, на це заняття не залишилося вільних місць. Обери інше заняття. 😔"
+            )
+        else:
+            await query.edit_message_text("⚠️ Помилка запису. Спробуй ще раз або звернися до Олі")
+
+    except Exception as exc:
+        logger.exception("Error in cb_trx_confirm (user=%s class=%s): %s", user_id, class_id, exc)
+        try:
+            if query and query.message:
+                await query.message.reply_text("⚠️ Сталася помилка, спробуй ще раз.")
+            elif user_id:
+                await context.bot.send_message(chat_id=user_id, text="⚠️ Сталася помилка, спробуй ще раз.")
+        except Exception:
+            pass
+
+
+async def cb_trx_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback: user cancelled registration from the TRX upsell warning."""
+    query = update.callback_query
+    try:
+        await query.answer()
+        await query.edit_message_text("Запис скасовано. 👌")
+    except Exception as exc:
+        logger.warning("Error in cb_trx_cancel: %s", exc)
 
 
 # ── UC-3: Cancel registration ─────────────────────────────────────────────────

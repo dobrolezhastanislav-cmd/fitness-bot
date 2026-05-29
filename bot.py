@@ -53,6 +53,8 @@ from handlers import (
     cb_toggle_attendance,
     cb_save_attendance,
     cb_class_attendees,
+    cb_trx_confirm,
+    cb_trx_cancel,
 )
 
 logging.basicConfig(
@@ -106,6 +108,8 @@ def main() -> None:
 
     # Inline keyboard callbacks
     app.add_handler(CallbackQueryHandler(cb_register, pattern=r"^r:"))
+    app.add_handler(CallbackQueryHandler(cb_trx_confirm, pattern=r"^trx_confirm:"))
+    app.add_handler(CallbackQueryHandler(cb_trx_cancel, pattern=r"^trx_cancel$"))
     app.add_handler(CallbackQueryHandler(cb_cancel_registration, pattern=r"^cx:"))
     app.add_handler(CallbackQueryHandler(cb_toggle_attendance, pattern=r"^mkat:"))
     app.add_handler(CallbackQueryHandler(cb_save_attendance, pattern=r"^mksave:"))

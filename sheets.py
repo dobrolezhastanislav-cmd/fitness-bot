@@ -644,6 +644,43 @@ def get_subscription_summary(client_id, for_registration: bool = False) -> Optio
     return None
 
 
+def get_trx_subscription_status(client_id) -> str:
+    """Return the TRX subscription status for a client.
+
+    Returns:
+      'trx_included' — effective subscription is абонемент (групові+TRX)
+      'groups_only'  — effective subscription is абонемент (групові)
+      'none'         — no valid or not-yet subscription found
+    """
+    try:
+        rows = [
+            r for r in _records("1_2_Subscriptions")
+            if str(r.get("ClientID", "")).strip() == str(client_id)
+        ]
+    except Exception as exc:
+        logger.warning("Could not read 1_2_Subscriptions for TRX check: %s", exc)
+        return "none"
+
+    # Prefer "valid" rows; fall back to "not yet"
+    valid_rows = [r for r in rows if str(r.get("IsCurrentlyValid", "")).strip().lower() == "valid"]
+    effective_rows = valid_rows or [r for r in rows if str(r.get("IsCurrentlyValid", "")).strip().lower() == "not yet"]
+
+    if not effective_rows:
+        return "none"
+
+    # Use the row with the newest ValidTo
+    def _vd(r):
+        return _parse_date(str(r.get("ValidTo", ""))) or date.min
+
+    best = max(effective_rows, key=_vd)
+    category = str(best.get("Category", "")).strip().lower()
+    if "групові+trx" in category or "групові + trx" in category:
+        return "trx_included"
+    if "групові" in category:
+        return "groups_only"
+    return "none"
+
+
 def cancel_registration(client_id, class_id) -> tuple[bool, str]:
     """
     Set AttendanceStatus to 'Cancelled' for a Planned row.
