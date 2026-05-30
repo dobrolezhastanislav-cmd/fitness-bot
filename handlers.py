@@ -590,10 +590,14 @@ async def _show_my_info(
     paid_left = client.get("ValidPaidAttendances", "—")
     last_visit = client.get("LastVisit", "—")
 
+    category = sheets.get_active_subscription_category(client.get("ClientID", ""))
+    category_line = category if category else "в тебе зараз немає діючого абонементу"
+
     # Build the message with client info
     msg = (
         f"👱‍♀️ *Твій профіль*\n\n"
         f"*Клієнт:* {last} {first}\n"
+        f"*Абонемент:* {category_line}\n"
         f"*Абонемент дійсний до:* {valid_through}\n"
         f"*Лишилося занять:* {paid_left}\n"
         f"*Останній візит:* {last_visit}"
