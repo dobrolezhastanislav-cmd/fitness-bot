@@ -644,6 +644,35 @@ def get_subscription_summary(client_id, for_registration: bool = False) -> Optio
     return None
 
 
+def get_active_subscription_category(client_id) -> Optional[str]:
+    """Return the Category of the client's current effective subscription, or None.
+
+    Prefers 'valid' rows; falls back to 'not yet' if no valid rows exist.
+    Returns None if no rows found or Category is empty.
+    """
+    try:
+        rows = [
+            r for r in _records("1_2_Subscriptions")
+            if str(r.get("ClientID", "")).strip() == str(client_id)
+        ]
+    except Exception as exc:
+        logger.warning("Could not read 1_2_Subscriptions for category: %s", exc)
+        return None
+
+    valid_rows = [r for r in rows if str(r.get("IsCurrentlyValid", "")).strip().lower() == "valid"]
+    effective_rows = valid_rows or [r for r in rows if str(r.get("IsCurrentlyValid", "")).strip().lower() == "not yet"]
+
+    if not effective_rows:
+        return None
+
+    def _vd(r):
+        return _parse_date(str(r.get("ValidTo", ""))) or date.min
+
+    best = max(effective_rows, key=_vd)
+    category = str(best.get("Category", "")).strip()
+    return category if category else None
+
+
 def get_trx_subscription_status(client_id) -> str:
     """Return the TRX subscription status for a client.
 
