@@ -753,3 +753,19 @@ def cancel_registration(client_id, class_id) -> tuple[bool, str]:
             continue
 
     return False, 'not_found'
+
+
+def get_with_me_text(class_name: str) -> Optional[str]:
+    """Return the 'what to bring' text for a class from the with_me tab, or None."""
+    try:
+        rows = _records("with_me")
+    except Exception as exc:
+        logger.warning("Could not read with_me tab: %s", exc)
+        return None
+    name_lower = class_name.strip().lower()
+    for row in rows:
+        key = str(row.get("Class", "")).strip().lower()
+        if key and key in name_lower:
+            text = str(row.get("with_me", "")).strip()
+            return text if text else None
+    return None

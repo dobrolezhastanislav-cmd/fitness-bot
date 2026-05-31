@@ -411,6 +411,9 @@ async def cb_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"*{cls.get('ClassName')}* ({formatted})"
                 + sub_lines,
                 parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎒 Що взяти з собою?", callback_data=f"with_me:{class_id}")],
+                ]),
             )
             await _notify_coaches(context, client, cls, "register", sub_lines)  # TEMP
         elif err == "already_registered":
@@ -469,6 +472,9 @@ async def cb_trx_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"*{cls.get('ClassName')}* ({formatted})"
                 + sub_lines,
                 parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎒 Що взяти з собою?", callback_data=f"with_me:{class_id}")],
+                ]),
             )
             await _notify_coaches(  # TEMP
                 context, client, cls, "register", sub_lines,
@@ -506,6 +512,23 @@ async def cb_trx_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_text("Запис скасовано. 👌")
     except Exception as exc:
         logger.warning("Error in cb_trx_cancel: %s", exc)
+
+
+async def cb_with_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback: user tapped 'Що взяти з собою?' after successful registration."""
+    query = update.callback_query
+    class_id = query.data.split(":", 1)[1] if query and query.data else None
+    try:
+        await query.answer()
+        cls = sheets.get_class_by_id(class_id) if class_id else None
+        class_name = cls.get("ClassName", "") if cls else ""
+        text = sheets.get_with_me_text(class_name) if class_name else None
+        if text:
+            await query.message.reply_text(text)
+        else:
+            await query.message.reply_text("Інформація для цього заняття відсутня.")
+    except Exception as exc:
+        logger.warning("Error in cb_with_me: %s", exc)
 
 
 # ── UC-3: Cancel registration ─────────────────────────────────────────────────
