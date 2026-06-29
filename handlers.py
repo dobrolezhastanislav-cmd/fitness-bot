@@ -335,6 +335,8 @@ async def _show_open_classes(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("На сьогодні немає занять, доступних для запису. 😔", do_quote=False)
         return
 
+    classes = sorted(classes, key=lambda c: (c.get('ClassStart', '') or ''))
+
     lines = []
     for c in classes:
         t = (c.get('ClassStart', '') or '')[:5]
@@ -555,6 +557,8 @@ async def _show_planned_registrations(
         await update.message.reply_text("Ти не записана на жодне заняття. 😊", do_quote=False)
         return
 
+    registrations = sorted(registrations, key=lambda r: (r.get('ClassDate', '') or '', r.get('ClassStart', '') or ''))
+
     buttons = [
         [InlineKeyboardButton(
             f"{r.get('ClassName', '—')} ({_short_datetime(r.get('ClassDate',''), r.get('ClassStart',''))})",
@@ -687,6 +691,8 @@ async def mark_class_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             do_quote=False,
         )
         return ConversationHandler.END
+
+    classes = sorted(classes, key=lambda c: (c.get('ClassStart', '') or ''))
 
     buttons = [
         [InlineKeyboardButton(_class_label(c), callback_data=f"mk:{c['ClassID']}")]
@@ -896,12 +902,14 @@ async def _show_class_attendees_list(update: Update, context: ContextTypes.DEFAU
             }
         seen[cid]["count"] += 1
 
+    sorted_seen = sorted(seen.values(), key=lambda v: (v.get('ClassDate', '') or '', v.get('ClassStart', '') or ''))
+
     buttons = [
         [InlineKeyboardButton(
             f"{v['ClassName']} ({_short_datetime(v['ClassDate'], v['ClassStart'])}) — {v['count']} чол.",
             callback_data=f"ca:{v['ClassID']}",
         )]
-        for v in seen.values()
+        for v in sorted_seen
     ]
     await update.message.reply_text(
         "Оберіть заняття:",
@@ -1000,6 +1008,8 @@ async def coach_select_target(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not classes_with_attendees:
         await query.edit_message_text("Немає занять із записаними клієнтами.")
         return ConversationHandler.END
+
+    classes_with_attendees = sorted(classes_with_attendees, key=lambda c: (c.get('ClassStart', '') or ''))
 
     buttons = [
         [InlineKeyboardButton(_class_label(c), callback_data=f"cc:{c['ClassID']}")]
