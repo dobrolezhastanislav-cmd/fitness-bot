@@ -89,7 +89,7 @@ COACH_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 # ConversationHandler states — broadcast
-COACH_SELECT_TARGET, COACH_SELECT_CLASS, COACH_TYPE_MSG, COACH_CONFIRM = range(4)
+COACH_SELECT_TARGET, COACH_SELECT_CLASS, COACH_TYPE_MSG, COACH_CONFIRM, COACH_CUSTOM_PREVIEW = range(5)
 
 # ConversationHandler states — mark class
 MARK_SELECT_CLASS, MARK_RAN_OR_NOT, MARK_CANCEL_REASON = range(10, 13)
@@ -967,6 +967,7 @@ async def coach_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     buttons = [
         [InlineKeyboardButton("👥 Всім клієнтам", callback_data="ct:all")],
         [InlineKeyboardButton("🏋️ Клієнтам конкретного заняття", callback_data="ct:class")],
+        [InlineKeyboardButton("🎯 Обраним клієнтам", callback_data="ct:custom")],
     ]
     await update.message.reply_text(
         "Кому надіслати повідомлення?",
@@ -985,6 +986,43 @@ async def coach_select_target(update: Update, context: ContextTypes.DEFAULT_TYPE
     if target == "all":
         await query.edit_message_text("Введіть текст повідомлення для всіх клієнтів:")
         return COACH_TYPE_MSG
+
+    if target == "custom":
+        sheets.invalidate("0_Clients")
+        try:
+            recipients = sheets.get_custom_group_clients()
+        except Exception as exc:
+            logger.error("Sheets error: %s", exc)
+            await query.edit_message_text("⚠️ Помилка підключення. Спробуйте ще раз.")
+            return ConversationHandler.END
+
+        if not recipients:
+            await query.edit_message_text(
+                "Немає обраних клієнтів. Позначте їх у колонці "
+                "'For direct messaging' на вкладці 0_Clients."
+            )
+            return ConversationHandler.END
+
+        context.user_data["broadcast_custom_recipients"] = recipients
+
+        def _name(c: dict) -> str:
+            n = str(c.get("LastName FirstName") or "").strip()
+            if not n:
+                n = f"{c.get('LastName', '')} {c.get('FirstName', '')}".strip()
+            return n or "—"
+
+        lines = "\n".join(f"• {_name(c)}" for c in recipients)
+        buttons = [
+            [
+                InlineKeyboardButton("✅ Продовжити", callback_data="cust:ok"),
+                InlineKeyboardButton("❌ Скасувати", callback_data="cust:no"),
+            ]
+        ]
+        await query.edit_message_text(
+            f"Обрано клієнтів: {len(recipients)}\n\n{lines}\n\nПродовжити?",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return COACH_CUSTOM_PREVIEW
 
     # Show upcoming classes
     try:
@@ -1036,14 +1074,41 @@ async def coach_select_class(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return COACH_TYPE_MSG
 
 
+async def coach_custom_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    action = query.data.split(":", 1)[1]
+    if action == "no":
+        await query.edit_message_text("❌ Розсилку скасовано.")
+        return ConversationHandler.END
+    await query.edit_message_text("Введіть текст повідомлення для обраних клієнтів:")
+    return COACH_TYPE_MSG
+
+
 async def coach_receive_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["broadcast_message"] = update.message.text
+    # Store the source message so it can be copied verbatim to each recipient
+    # (preserves text, caption, photo/video/document, and formatting).
+    context.user_data["broadcast_message"] = update.message.text or ""
+    context.user_data["broadcast_from_chat_id"] = update.message.chat_id
+    context.user_data["broadcast_message_id"] = update.message.message_id
 
     target = context.user_data.get("broadcast_target", "all")
     if target == "all":
         recipients_desc = "всіх клієнтів"
+    elif target == "custom":
+        count = len(context.user_data.get("broadcast_custom_recipients", []))
+        recipients_desc = f"обраних клієнтів ({count})"
     else:
         recipients_desc = f"клієнтів заняття {context.user_data.get('broadcast_class_label', '')}"
+
+    if update.message.photo:
+        content_desc = "🖼 Фото" + (f" з підписом" if update.message.caption else "")
+    elif update.message.video:
+        content_desc = "🎬 Відео" + (f" з підписом" if update.message.caption else "")
+    elif update.message.document:
+        content_desc = "📎 Файл" + (f" з підписом" if update.message.caption else "")
+    else:
+        content_desc = "✉️ Текст"
 
     buttons = [
         [
@@ -1053,7 +1118,8 @@ async def coach_receive_message(update: Update, context: ContextTypes.DEFAULT_TY
     ]
     await update.message.reply_text(
         f"📢 *Надіслати повідомлення {recipients_desc}?*\n\n"
-        f"Текст:\n{update.message.text}",
+        f"Вміст: {content_desc}\n"
+        f"(отримувачі побачать це повідомлення точно як вище 👆)",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup(buttons),
         do_quote=False,
@@ -1071,11 +1137,14 @@ async def coach_confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
 
     target = context.user_data.get("broadcast_target", "all")
-    message_text = context.user_data.get("broadcast_message", "")
+    from_chat_id = context.user_data.get("broadcast_from_chat_id")
+    source_message_id = context.user_data.get("broadcast_message_id")
 
     try:
         if target == "all":
             recipients = sheets.get_all_clients_with_telegram()
+        elif target == "custom":
+            recipients = context.user_data.get("broadcast_custom_recipients", [])
         else:
             class_id = context.user_data.get("broadcast_class_id", "")
             recipients = sheets.get_attendees_for_class(class_id)
@@ -1090,7 +1159,11 @@ async def coach_confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not tg_id:
             continue
         try:
-            await context.bot.send_message(chat_id=int(tg_id), text=message_text)
+            await context.bot.copy_message(
+                chat_id=int(tg_id),
+                from_chat_id=from_chat_id,
+                message_id=source_message_id,
+            )
             sent += 1
         except Exception as exc:
             logger.warning("Could not send to %s: %s", tg_id, exc)
@@ -1131,7 +1204,11 @@ def build_coach_conv_handler() -> ConversationHandler:
         states={
             COACH_SELECT_TARGET: [CallbackQueryHandler(coach_select_target, pattern=r"^ct:")],
             COACH_SELECT_CLASS: [CallbackQueryHandler(coach_select_class, pattern=r"^cc:")],
-            COACH_TYPE_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, coach_receive_message)],
+            COACH_CUSTOM_PREVIEW: [CallbackQueryHandler(coach_custom_preview, pattern=r"^cust:")],
+            COACH_TYPE_MSG: [MessageHandler(
+                (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL) & ~filters.COMMAND,
+                coach_receive_message,
+            )],
             COACH_CONFIRM: [CallbackQueryHandler(coach_confirm_send, pattern=r"^csend:")],
         },
         fallbacks=[CommandHandler("cancel", coach_cancel)],
