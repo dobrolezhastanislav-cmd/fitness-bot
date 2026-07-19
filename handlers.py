@@ -1086,7 +1086,11 @@ async def coach_custom_preview(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def coach_receive_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["broadcast_message"] = update.message.text
+    # Store the source message so it can be copied verbatim to each recipient
+    # (preserves text, caption, photo/video/document, and formatting).
+    context.user_data["broadcast_message"] = update.message.text or ""
+    context.user_data["broadcast_from_chat_id"] = update.message.chat_id
+    context.user_data["broadcast_message_id"] = update.message.message_id
 
     target = context.user_data.get("broadcast_target", "all")
     if target == "all":
@@ -1097,6 +1101,15 @@ async def coach_receive_message(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         recipients_desc = f"клієнтів заняття {context.user_data.get('broadcast_class_label', '')}"
 
+    if update.message.photo:
+        content_desc = "🖼 Фото" + (f" з підписом" if update.message.caption else "")
+    elif update.message.video:
+        content_desc = "🎬 Відео" + (f" з підписом" if update.message.caption else "")
+    elif update.message.document:
+        content_desc = "📎 Файл" + (f" з підписом" if update.message.caption else "")
+    else:
+        content_desc = "✉️ Текст"
+
     buttons = [
         [
             InlineKeyboardButton("✅ Надіслати", callback_data="csend:ok"),
@@ -1105,7 +1118,8 @@ async def coach_receive_message(update: Update, context: ContextTypes.DEFAULT_TY
     ]
     await update.message.reply_text(
         f"📢 *Надіслати повідомлення {recipients_desc}?*\n\n"
-        f"Текст:\n{update.message.text}",
+        f"Вміст: {content_desc}\n"
+        f"(отримувачі побачать це повідомлення точно як вище 👆)",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup(buttons),
         do_quote=False,
@@ -1123,7 +1137,8 @@ async def coach_confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
 
     target = context.user_data.get("broadcast_target", "all")
-    message_text = context.user_data.get("broadcast_message", "")
+    from_chat_id = context.user_data.get("broadcast_from_chat_id")
+    source_message_id = context.user_data.get("broadcast_message_id")
 
     try:
         if target == "all":
@@ -1144,7 +1159,11 @@ async def coach_confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not tg_id:
             continue
         try:
-            await context.bot.send_message(chat_id=int(tg_id), text=message_text)
+            await context.bot.copy_message(
+                chat_id=int(tg_id),
+                from_chat_id=from_chat_id,
+                message_id=source_message_id,
+            )
             sent += 1
         except Exception as exc:
             logger.warning("Could not send to %s: %s", tg_id, exc)
@@ -1186,7 +1205,10 @@ def build_coach_conv_handler() -> ConversationHandler:
             COACH_SELECT_TARGET: [CallbackQueryHandler(coach_select_target, pattern=r"^ct:")],
             COACH_SELECT_CLASS: [CallbackQueryHandler(coach_select_class, pattern=r"^cc:")],
             COACH_CUSTOM_PREVIEW: [CallbackQueryHandler(coach_custom_preview, pattern=r"^cust:")],
-            COACH_TYPE_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, coach_receive_message)],
+            COACH_TYPE_MSG: [MessageHandler(
+                (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL) & ~filters.COMMAND,
+                coach_receive_message,
+            )],
             COACH_CONFIRM: [CallbackQueryHandler(coach_confirm_send, pattern=r"^csend:")],
         },
         fallbacks=[CommandHandler("cancel", coach_cancel)],
