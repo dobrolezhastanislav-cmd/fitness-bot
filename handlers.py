@@ -325,7 +325,8 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def _show_open_classes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        classes = sheets.get_open_classes()
+        classes = sheets.get_today_planned_classes()
+        locked_ids = sheets.get_locked_empty_edge_class_ids()
     except Exception as exc:
         logger.error("Sheets error: %s", exc)
         await update.message.reply_text("⚠️ Помилка підключення до Google Sheets. Спробуй пізніше.", do_quote=False)
@@ -335,24 +336,27 @@ async def _show_open_classes(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("На сьогодні немає занять, доступних для запису. 😔", do_quote=False)
         return
 
-    classes = sorted(classes, key=lambda c: (c.get('ClassStart', '') or ''))
+    def _is_open(c: dict) -> bool:
+        return (str(c.get('ClassID', '')).strip() not in locked_ids
+                and sheets.is_registration_open(c))
 
     lines = []
+    buttons = []
     for c in classes:
+        name = c.get('ClassName', '—')
         t = (c.get('ClassStart', '') or '')[:5]
         try:
             slots = int(str(c.get('SlotsRemaining', '0')).strip() or '0')
         except ValueError:
             slots = 0
-        lines.append(f"• {c.get('ClassName', '—')} {t} — {slots} вільних місць")
+        if _is_open(c):
+            lines.append(f"• {name} {t} — {slots} вільних місць")
+            label = f"{name} ({t}) · 📝"
+        else:
+            lines.append(f"• ❌ {name} {t} — запис закритий")
+            label = f"❌ {name} ({t})"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"r:{c['ClassID']}")])
 
-    buttons = [
-        [InlineKeyboardButton(
-            f"{c.get('ClassName', '—')} ({(c.get('ClassStart', '') or '')[:5]})",
-            callback_data=f"r:{c['ClassID']}"
-        )]
-        for c in classes
-    ]
     await update.message.reply_text(
         "Заняття на сьогодні:\n\n" + "\n".join(lines) + "\n\nОбери заняття 👇",
         reply_markup=InlineKeyboardMarkup(buttons),
@@ -393,6 +397,17 @@ async def cb_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await context.bot.send_message(chat_id=user_id, text=text)
             return
 
+        # Empty-edge lock: first/last class of the day with no registrations,
+        # within the lock window. Refuse before the TRX prompt so the client
+        # sees the correct reason immediately.
+        if sheets.is_empty_edge_locked(cls):
+            text = "Нажаль, запис на це заняття вже закритий"
+            if query:
+                await query.edit_message_text(text)
+            else:
+                await context.bot.send_message(chat_id=user_id, text=text)
+            return
+
         # TRX upsell warning: client has групові-only subscription
         if "trx" in str(cls.get("ClassName", "")).lower():
             trx_status = sheets.get_trx_subscription_status(client["ClientID"])
@@ -425,6 +440,8 @@ async def cb_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await _notify_coaches(context, client, cls, "register", sub_lines)  # TEMP
         elif err == "already_registered":
             await query.edit_message_text("Ти вже йдеш на це заняття. 😊")
+        elif err == "edge_locked":
+            await query.edit_message_text("Нажаль, запис на це заняття вже закритий")
         elif err == "closed":
             await query.edit_message_text(
                 "Нажаль, запис на це заняття закрився. Чекаємо тебе на наступних заняттях. 😊"
@@ -489,6 +506,8 @@ async def cb_trx_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         elif err == "already_registered":
             await query.edit_message_text("Ти вже йдеш на це заняття. 😊")
+        elif err == "edge_locked":
+            await query.edit_message_text("Нажаль, запис на це заняття вже закритий")
         elif err == "closed":
             await query.edit_message_text(
                 "Нажаль, запис на це заняття закрився. Чекаємо тебе на наступних заняттях. 😊"

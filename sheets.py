@@ -37,6 +37,20 @@ CACHE_TTL = 60  # seconds; keeps Sheet reads fast, avoids quota issues
 _register_lock = asyncio.Lock()  # prevents concurrent duplicate insertions
 
 
+def _empty_class_lock_minutes() -> int:
+    """Minutes before ClassStart when an empty edge class stops accepting registration.
+
+    Configured via the EMPTY_CLASS_LOCK_MINUTES env var (Railway) so it can be
+    changed seasonally (e.g. 15 in summer, 30 in winter for gym warm-up) without
+    touching config.json. Defaults to 15. Read live each call so a Railway change
+    takes effect on the next bot restart, consistent with other env values.
+    """
+    try:
+        return int(os.getenv("EMPTY_CLASS_LOCK_MINUTES", "15").strip() or "15")
+    except ValueError:
+        return 15
+
+
 # ---- Initialisation --------------------------------------------------------
 
 def init_sheets(spreadsheet_id: str, credentials_path: str = "credentials.json", token_path: str = "token.json") -> None:
@@ -259,6 +273,84 @@ def is_cancellation_allowed(cls: dict) -> bool:
     return datetime.now() + timedelta(minutes=30) < cls_dt
 
 
+def _attendee_count(cls: dict) -> int:
+    """Number of non-cancelled registrations for a class (reads AttendeeRegistered).
+
+    The AttendeeRegistered column is a sheet formula that already excludes
+    Cancelled rows. Empty / non-numeric values are treated as 0.
+    """
+    try:
+        return int(str(cls.get("AttendeeRegistered", "0")).strip() or "0")
+    except ValueError:
+        return 0
+
+
+def get_today_planned_classes() -> list[dict]:
+    """All of today's Planned classes, sorted by ClassStart (past ones included)."""
+    today = date.today()
+    result = [
+        r for r in _records("2_1_Classes")
+        if str(r.get("ClassStatus", "")).strip().lower() == "planned"
+        and _parse_date(str(r.get("ClassDate", ""))) == today
+    ]
+    return sorted(result, key=lambda c: (str(c.get("ClassStart", "")) or ""))
+
+
+def get_locked_empty_edge_class_ids() -> set:
+    """ClassIDs of today's Planned classes locked by the 'empty edge' rule.
+
+    A class is locked when ALL hold:
+      1. Fewer than EMPTY_CLASS_LOCK_MINUTES remain until ClassStart
+         (already-started / past classes also qualify).
+      2. It has 0 registrations (AttendeeRegistered == 0).
+      3. It is currently the first or last of the day's *still-live* classes.
+
+    'Still-live' is computed dynamically (domino): the earliest and latest
+    classes are peeled off one at a time. An empty edge class gets locked and
+    removed from the live set, exposing the next class as the new edge, which is
+    re-evaluated. A class with >=1 registration anchors that edge and stops the
+    peeling from its side. Middle classes are never locked — the coach is in the
+    gym between the anchored edges regardless.
+
+    Returns a set of ClassID strings (as stored in the sheet).
+    """
+    classes = get_today_planned_classes()
+    if not classes:
+        return set()
+
+    now = datetime.now()
+    cutoff = timedelta(minutes=_empty_class_lock_minutes())
+
+    def is_empty_and_late(cls: dict) -> bool:
+        cls_dt = _parse_datetime(str(cls.get("ClassDate", "")), str(cls.get("ClassStart", "")))
+        if cls_dt is None:
+            return False
+        # < N minutes left, or already started / passed
+        if now + cutoff <= cls_dt:
+            return False
+        return _attendee_count(cls) == 0
+
+    locked: set = set()
+    # Work on a mutable view of the live set and peel both ends.
+    live = list(classes)
+    # Peel from the front (earliest = "first")
+    while live and is_empty_and_late(live[0]):
+        locked.add(str(live[0].get("ClassID", "")).strip())
+        live.pop(0)
+    # Peel from the back (latest = "last"); may meet the front peel
+    while live and is_empty_and_late(live[-1]):
+        locked.add(str(live[-1].get("ClassID", "")).strip())
+        live.pop()
+
+    locked.discard("")
+    return locked
+
+
+def is_empty_edge_locked(cls: dict) -> bool:
+    """True if this class is currently locked by the empty-edge rule."""
+    return str(cls.get("ClassID", "")).strip() in get_locked_empty_edge_class_ids()
+
+
 def get_upcoming_classes(within_minutes: int = 5, from_now: Optional[datetime] = None) -> list[dict]:
     """
     Return classes whose start time falls in the window
@@ -338,6 +430,10 @@ async def register_client(client: dict, cls: dict) -> tuple[bool, str]:
         cls_dt = _parse_datetime(str(fresh_cls.get("ClassDate", "")), str(fresh_cls.get("ClassStart", "")))
         if cls_dt is None or datetime.now() >= cls_dt:
             return False, "closed"
+        # Empty-edge rule: first/last class of the day with no registrations,
+        # within the lock window — coach won't come in / stay for an empty class.
+        if str(fresh_cls.get("ClassID", "")).strip() in get_locked_empty_edge_class_ids():
+            return False, "edge_locked"
         try:
             slots = int(str(fresh_cls.get("SlotsRemaining", "0")).strip() or "0")
         except ValueError:
