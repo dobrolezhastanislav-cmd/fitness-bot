@@ -241,12 +241,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # ── Route to client features ────────────────────────────────────────────
     if text == BTN_REGISTER:
-        if config.VACATION_MODE and not is_coach_user:
+        if config.VACATION_MODE:
             await _vacation_reply(update, VACATION_REGISTER_TEXT)
         else:
             await _show_open_classes(update, context)
     elif text == BTN_CANCEL:
-        if config.VACATION_MODE and not is_coach_user:
+        if config.VACATION_MODE:
             await _vacation_reply(update, VACATION_CANCEL_TEXT)
         else:
             await _show_planned_registrations(update, context, client)
@@ -319,6 +319,8 @@ async def _handle_unknown_user(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=contact_keyboard,
         do_quote=False,
     )
+    if config.VACATION_MODE:
+        await _send_vacation_poster(update)
 
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
