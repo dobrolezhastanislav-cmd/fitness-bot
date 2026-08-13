@@ -133,6 +133,28 @@ async def _send_files_or_text(update: Update, filepaths: list, fallback: str, pa
                 await update.message.reply_document(f, do_quote=False)
 
 
+# ── Vacation mode ────────────────────────────────────────────────────────────
+# Enabled via the VACATION_MODE env var (Railway). See config.py.
+
+VACATION_REGISTER_TEXT = "Сьогодні занять немає - Оля у відпустці"
+VACATION_CANCEL_TEXT = "Так а що скасовувати, якщо занять немає. Оля ж у відпустці"
+
+
+async def _send_vacation_poster(update: Update) -> None:
+    """Send the vacation poster; silently skipped if the file is missing."""
+    path = config.VACATION_POSTER_FILE
+    if not path or not os.path.isfile(path):
+        logger.warning("Vacation poster not found at %s", path)
+        return
+    with open(path, "rb") as f:
+        await update.message.reply_photo(f, do_quote=False)
+
+
+async def _vacation_reply(update: Update, text: str) -> None:
+    await update.message.reply_text(text, do_quote=False)
+    await _send_vacation_poster(update)
+
+
 def _subscription_lines(summary: Optional[dict], label: str = "Залишок після цього заняття") -> str:
     """Format subscription info for appending to confirmation messages."""
     if not summary:
@@ -180,6 +202,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not client and not is_coach_user:
         # Allow unknown users to view public info without registering
         if text == BTN_SCHEDULE:
+            if config.VACATION_MODE:
+                await _send_vacation_poster(update)
             await _send_file_or_text(
                 update, config.SCHEDULE_FILE,
                 f'Розклад тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
@@ -217,12 +241,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # ── Route to client features ────────────────────────────────────────────
     if text == BTN_REGISTER:
-        await _show_open_classes(update, context)
+        if config.VACATION_MODE and not is_coach_user:
+            await _vacation_reply(update, VACATION_REGISTER_TEXT)
+        else:
+            await _show_open_classes(update, context)
     elif text == BTN_CANCEL:
-        await _show_planned_registrations(update, context, client)
+        if config.VACATION_MODE and not is_coach_user:
+            await _vacation_reply(update, VACATION_CANCEL_TEXT)
+        else:
+            await _show_planned_registrations(update, context, client)
     elif text == BTN_MY_INFO:
         await _show_my_info(update, context, client)
     elif text == BTN_SCHEDULE:
+        if config.VACATION_MODE:
+            await _send_vacation_poster(update)
         await _send_file_or_text(
             update, config.SCHEDULE_FILE,
             f'Розклад тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
