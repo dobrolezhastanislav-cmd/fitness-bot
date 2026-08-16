@@ -4,5 +4,6 @@
   "schedule_file": "files/schedule.jpg",
   "rules_files": ["files/rules1.jpg", "files/rules2.jpg"],
   "pricelist_files": ["files/pricelist1.jpg", "files/pricelist2.jpg"],
+  "vacation_poster_file": "files/vacation_poster.jpg",
   "timezone": "Europe/Kiev"
 }

@@ -133,6 +133,75 @@ async def _send_files_or_text(update: Update, filepaths: list, fallback: str, pa
                 await update.message.reply_document(f, do_quote=False)
 
 
+def _unknown_user_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard for users who are neither clients nor coaches."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📱 Поділитися номером телефону", request_contact=True)],
+            [BTN_SCHEDULE, BTN_RULES],
+            [BTN_PRICELIST],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
+def _looks_like_phone(text: str) -> bool:
+    """True only for text that is plausibly a real phone number.
+
+    Guards the unknown-user path. Two things must NOT slip through:
+      • ordinary chat ("заняття о 18:00?") — contains digits, isn't a number
+      • a bare Telegram ID (e.g. 798764213) — 9-10 digits, looks phone-shaped
+
+    Accepted shapes (after stripping spaces/dashes/dots/parens):
+      +380XXXXXXXXX / 380XXXXXXXXX   — 12 digits, UA country code
+      0XXXXXXXXX                     — 10 digits, national format
+      +<country><subscriber>         — 11-15 digits, other countries
+    A 9-digit bare subscriber number is rejected: it is indistinguishable
+    from a Telegram ID, and UA numbers are normally written with the 0 or +380.
+    """
+    if not text:
+        return False
+    stripped = re.sub(r"[\s()\-.–—]", "", text.strip())
+    had_plus = stripped.startswith("+")
+    if had_plus:
+        stripped = stripped[1:]
+    if not stripped.isdigit():
+        return False
+
+    n = len(stripped)
+    if stripped.startswith("380"):
+        return n == 12
+    if stripped.startswith("0"):
+        return n == 10
+    if had_plus:
+        # Explicit international form — trust the + and check E.164 length.
+        return 11 <= n <= 15
+    return False
+
+
+# ── Vacation mode ────────────────────────────────────────────────────────────
+# Enabled via the VACATION_MODE env var (Railway). See config.py.
+
+VACATION_REGISTER_TEXT = "Сьогодні занять немає - Оля у відпустці"
+VACATION_CANCEL_TEXT = "Так а що скасовувати, якщо занять немає. Оля ж у відпустці"
+
+
+async def _send_vacation_poster(update: Update) -> None:
+    """Send the vacation poster; silently skipped if the file is missing."""
+    path = config.VACATION_POSTER_FILE
+    if not path or not os.path.isfile(path):
+        logger.warning("Vacation poster not found at %s", path)
+        return
+    with open(path, "rb") as f:
+        await update.message.reply_photo(f, do_quote=False)
+
+
+async def _vacation_reply(update: Update, text: str) -> None:
+    await update.message.reply_text(text, do_quote=False)
+    await _send_vacation_poster(update)
+
+
 def _subscription_lines(summary: Optional[dict], label: str = "Залишок після цього заняття") -> str:
     """Format subscription info for appending to confirmation messages."""
     if not summary:
@@ -180,6 +249,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not client and not is_coach_user:
         # Allow unknown users to view public info without registering
         if text == BTN_SCHEDULE:
+            if config.VACATION_MODE:
+                await _send_vacation_poster(update)
             await _send_file_or_text(
                 update, config.SCHEDULE_FILE,
                 f'Розклад тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
@@ -200,29 +271,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 parse_mode=ParseMode.HTML,
             )
             return
-        # If user typed a phone-like text, treat it as a manual contact share
         text = text or ""
-        if text and any(ch.isdigit() for ch in text):
-            # naive check: contains digits and isn't a command
-            # forward to contact handler by fabricating a contact object
-            class DummyContact:
-                def __init__(self, number):
-                    self.phone_number = number
 
-            update.message.contact = DummyContact(text)
-            await handle_contact(update, context)
+        # First message from this user → full greeting. Only after they have
+        # already seen it do we fall back to the shorter "buttons only" nudge.
+        if not context.user_data.get("greeted"):
+            await _handle_unknown_user(update, context)
             return
-        await _handle_unknown_user(update, context)
+
+        if _looks_like_phone(text):
+            await handle_contact(update, context, phone_override=text)
+            return
+
+        # Free text that isn't a phone number → nudge back to the buttons.
+        # reply_markup is required: it replaces whatever keyboard the user
+        # currently has (e.g. a stale coach keyboard).
+        await update.message.reply_text(
+            "Я би з радістю поспілкувався, але мене того не навчили. "
+            "Я розумію тільки команди з кнопок. Також, май на увазі, нашу з тобою "
+            "переписку Оля не бачить. Щоб вона могла з тобою зв'язатися — поділися "
+            "номером телефону 👇",
+            reply_markup=_unknown_user_keyboard(),
+            do_quote=False,
+        )
         return
 
     # ── Route to client features ────────────────────────────────────────────
     if text == BTN_REGISTER:
-        await _show_open_classes(update, context)
+        if config.VACATION_MODE:
+            await _vacation_reply(update, VACATION_REGISTER_TEXT)
+        else:
+            await _show_open_classes(update, context)
     elif text == BTN_CANCEL:
-        await _show_planned_registrations(update, context, client)
+        if config.VACATION_MODE:
+            await _vacation_reply(update, VACATION_CANCEL_TEXT)
+        else:
+            await _show_planned_registrations(update, context, client)
     elif text == BTN_MY_INFO:
         await _show_my_info(update, context, client)
     elif text == BTN_SCHEDULE:
+        if config.VACATION_MODE:
+            await _send_vacation_poster(update)
         await _send_file_or_text(
             update, config.SCHEDULE_FILE,
             f'Розклад тимчасово недоступний. Завітай на наш <a href="{config.INSTAGRAM_URL}">Instagram</a>',
@@ -269,15 +358,10 @@ async def _handle_unknown_user(update: Update, context: ContextTypes.DEFAULT_TYP
     """User is not in 0_Clients and not a coach."""
     user_id = update.effective_user.id if update.effective_user else None
     logger.info("prompting unknown user for contact: %s", user_id)
-    contact_keyboard = ReplyKeyboardMarkup(
-        [
-            [KeyboardButton("📱 Поділитися номером телефону", request_contact=True)],
-            [BTN_SCHEDULE, BTN_RULES],
-            [BTN_PRICELIST],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=False,
-    )
+    # Remember that the full greeting was shown; later messages get the
+    # shorter "buttons only" nudge instead of repeating it.
+    context.user_data["greeted"] = True
+    contact_keyboard = _unknown_user_keyboard()
     await update.message.reply_text(
         "Добрий день! Схоже, Ви не являєтеся відвідувачем нашої студії або у нас не зафіксований Ваш контакт. "
         "Поділіться своїм номером телефону і ми все владнаємо. 🙏\n\n"
@@ -287,13 +371,45 @@ async def _handle_unknown_user(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=contact_keyboard,
         do_quote=False,
     )
+    if config.VACATION_MODE:
+        await _send_vacation_poster(update)
 
 
-async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle phone number shared by a non-client user (UC-1)."""
+async def handle_contact(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, phone_override: Optional[str] = None
+) -> None:
+    """Handle a phone number shared by a non-client user (UC-1).
+
+    Preferred path is a self-shared contact card: it carries both the phone
+    number and the Telegram ID. A typed number (phone_override) is also
+    accepted as a fallback — the Telegram ID still comes from the sender —
+    but is flagged to Оля as unverified.
+    """
     user = update.effective_user
     contact = update.message.contact
-    phone = contact.phone_number if contact else "невідомо"
+
+    # A forwarded third-party card would give Оля the wrong person's number.
+    if contact is not None and contact.user_id is not None and user is not None \
+            and contact.user_id != user.id:
+        logger.info(
+            "rejected foreign contact from %s (card belongs to %s)", user.id, contact.user_id
+        )
+        await update.message.reply_text(
+            "Схоже, це чужий контакт. Надішли, будь ласка, свій власний "
+            "контакт кнопкою нижче 👇",
+            reply_markup=_unknown_user_keyboard(),
+            do_quote=False,
+        )
+        return
+
+    if contact is not None:
+        phone = contact.phone_number or "невідомо"
+        card_name = " ".join(filter(None, [contact.first_name, contact.last_name])).strip()
+        verified = contact.user_id is not None and user is not None and contact.user_id == user.id
+    else:
+        phone = phone_override or "невідомо"
+        card_name = ""
+        verified = False
 
     await update.message.reply_text(
         "Дякую. Чекате на зворотній зв'язок від Олі 😊",
@@ -314,7 +430,9 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     f"Моб: {phone}\n"
                     f"TelegramID: {user.id}\n"
                     f"Нік: @{user.username or '—'}\n"
-                    f"Ім'я: {user.full_name}"
+                    f"Ім'я: {user.full_name}\n"
+                    f"Ім'я з контакту: {card_name or '—'}"
+                    + ("" if verified else "\n⚠️ Номер введено вручну, не підтверджено Telegram")
                 ),
             )
         except Exception as exc:

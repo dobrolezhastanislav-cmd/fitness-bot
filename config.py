@@ -21,11 +21,16 @@ SCHEDULE_FILE: str = ""
 RULES_FILES: list = []
 PRICELIST_FILES: list = []
 TIMEZONE: str = "Europe/Kiev"
+VACATION_MODE: bool = False
+VACATION_POSTER_FILE: str = ""
+
+_TRUTHY = {"yes", "true", "1", "y", "так", "on", "✓", "✔"}
 
 
 def load_config() -> dict:
     global BOT_TOKEN, OWNER_TG_ID, COACH_TG_IDS, SPREADSHEET_ID
     global CREDENTIALS_PATH, INSTAGRAM_URL, SCHEDULE_FILE, RULES_FILES, PRICELIST_FILES, TIMEZONE
+    global VACATION_MODE, VACATION_POSTER_FILE
 
     BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
     if not BOT_TOKEN:
@@ -68,6 +73,15 @@ def load_config() -> dict:
 
     RULES_FILES = _resolve_files("rules_files", ["files/rules1.jpg", "files/rules2.jpg"])
     PRICELIST_FILES = _resolve_files("pricelist_files", ["files/pricelist1.jpg", "files/pricelist2.jpg"])
+
+    # Vacation mode — set VACATION_MODE=true in Railway variables (or .env) to enable.
+    vacation_env = os.getenv("VACATION_MODE", "").strip().lower()
+    if vacation_env:
+        VACATION_MODE = vacation_env in _TRUTHY
+    else:
+        VACATION_MODE = bool(data.get("vacation_mode", False))
+    VACATION_POSTER_FILE = str(BASE_DIR / data.get("vacation_poster_file", "files/vacation_poster.jpg"))
+    _log.getLogger(__name__).info("VACATION_MODE: %s (from env: %r)", VACATION_MODE, vacation_env)
 
     if not SPREADSHEET_ID or SPREADSHEET_ID == "your-google-spreadsheet-id-here":
         raise ValueError(
