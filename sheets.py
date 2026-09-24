@@ -399,6 +399,7 @@ async def register_client(client: dict, cls: dict) -> tuple[bool, str]:
             classname_col = col_idx('classname') or 7
             status_col = col_idx('attendancestatus') or 10
             dlm_col = col_idx('dlm')
+            notes_col = col_idx('notes')
 
             sheet_id = ws._properties.get('sheetId') if ws._properties else None
             if not sheet_id:
@@ -472,6 +473,9 @@ async def register_client(client: dict, cls: dict) -> tuple[bool, str]:
             ]
             if dlm_col:
                 cell_writes.append((dlm_col, _kyiv_now_str()))
+            # Notes belong to the copied row's attendance, not this one.
+            if notes_col:
+                cell_writes.append((notes_col, ''))
 
             for col_1based, value in cell_writes:
                 range_updates.append({
