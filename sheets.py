@@ -309,9 +309,11 @@ def is_client_registered_for_class(client_id, class_id) -> bool:
         for r in _records("2_2_Attendance")
     )
 
-async def register_client(client: dict, cls: dict) -> tuple[bool, str]:
+async def register_client(client: dict, cls: dict, charge_type: str = "Subscription") -> tuple[bool, str]:
     """
     Add a new Planned row to 2_2_Attendance, or reactivate a Cancelled one.
+    charge_type is written to the ChargeType column ("Subscription" or "Single");
+    the sheet's UsedGroup formula only counts "Subscription" rows.
     Returns (success: bool, error_key: str).
     error_key is '' on success, 'closed', 'full', or 'already_registered' otherwise.
 
@@ -363,6 +365,8 @@ async def register_client(client: dict, cls: dict) -> tuple[bool, str]:
                                 and str(row_vals[status_col]).strip().lower() == "cancelled"):
                             updates = [[_kyiv_now_str()]] if "dlm" in lc else None
                             ws.update_cell(idx, status_col + 1, "Planned")
+                            if "chargetype" in lc:
+                                ws.update_cell(idx, lc.index("chargetype") + 1, charge_type)
                             if updates:
                                 ws.update_cell(idx, lc.index("dlm") + 1, _kyiv_now_str())
                             invalidate("2_2_Attendance", "2_1_Classes")
@@ -400,6 +404,7 @@ async def register_client(client: dict, cls: dict) -> tuple[bool, str]:
             status_col = col_idx('attendancestatus') or 10
             dlm_col = col_idx('dlm')
             notes_col = col_idx('notes')
+            charge_col = col_idx('chargetype')
 
             sheet_id = ws._properties.get('sheetId') if ws._properties else None
             if not sheet_id:
@@ -473,6 +478,9 @@ async def register_client(client: dict, cls: dict) -> tuple[bool, str]:
             ]
             if dlm_col:
                 cell_writes.append((dlm_col, _kyiv_now_str()))
+            # Always write ChargeType: the copied row's value must not leak.
+            if charge_col:
+                cell_writes.append((charge_col, charge_type))
             # Notes belong to the copied row's attendance, not this one.
             if notes_col:
                 cell_writes.append((notes_col, ''))
