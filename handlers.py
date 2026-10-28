@@ -587,7 +587,7 @@ async def cb_trx_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.edit_message_text("Заняття не знайдено.")
             return
 
-        ok, err = await sheets.register_client(client, cls, charge_type="Single")
+        ok, err = await sheets.register_client(client, cls)
         if ok:
             formatted = _short_datetime(cls.get("ClassDate"), cls.get("ClassStart"))
             # Single-paid class doesn't touch the subscription → don't subtract 1.

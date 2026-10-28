@@ -309,11 +309,11 @@ def is_client_registered_for_class(client_id, class_id) -> bool:
         for r in _records("2_2_Attendance")
     )
 
-async def register_client(client: dict, cls: dict, charge_type: str = "Subscription") -> tuple[bool, str]:
+async def register_client(client: dict, cls: dict) -> tuple[bool, str]:
     """
     Add a new Planned row to 2_2_Attendance, or reactivate a Cancelled one.
-    charge_type is written to the ChargeType column ("Subscription" or "Single");
-    the sheet's UsedGroup formula only counts "Subscription" rows.
+    ChargeType is computed by get_charge_type() and always written (the sheet's
+    UsedGroup formula excludes only "Single").
     Returns (success: bool, error_key: str).
     error_key is '' on success, 'closed', 'full', or 'already_registered' otherwise.
 
@@ -346,6 +346,8 @@ async def register_client(client: dict, cls: dict, charge_type: str = "Subscript
             slots = 0
         if slots <= 0:
             return False, "full"
+
+        charge_type = get_charge_type(client["ClientID"], fresh_cls.get("ClassName", ""))
 
         # If a Cancelled row already exists for this client+class, reactivate it
         # instead of inserting a duplicate row.
@@ -737,6 +739,21 @@ def get_trx_subscription_status(client_id) -> str:
     if "групові" in category:
         return "groups_only"
     return "none"
+
+
+def get_charge_type(client_id, class_name) -> str:
+    """Value for 2_2_Attendance.ChargeType on a new registration.
+
+    'Single'       — class is TRX but the effective subscription doesn't include TRX
+    ''             — client has no effective subscription (valid / not yet)
+    'Subscription' — otherwise
+    """
+    status = get_trx_subscription_status(client_id)
+    if status == "none":
+        return ""
+    if status == "groups_only" and "trx" in str(class_name).lower():
+        return "Single"
+    return "Subscription"
 
 
 def cancel_registration(client_id, class_id) -> tuple[bool, str]:
