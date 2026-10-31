@@ -925,10 +925,17 @@ async def mark_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def mark_class_cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Fallback /cancel inside the mark-class conversation."""
-    context.user_data.pop("marking_class_id", None)
+    class_id = context.user_data.pop("marking_class_id", None)
     context.user_data.pop("attendance", None)
+    if class_id:
+        # Class is already Cancelled in 2_1_Classes; don't leave registrations Planned.
+        cancelled = sheets.cancel_class_attendances(class_id, "")
+        text = (f"Заняття залишається скасованим, причину не вказано.\n"
+                f"Скасовано записів клієнтів: {cancelled}")
+    else:
+        text = "❌ Відмічення заняття скасовано."
     await update.message.reply_text(
-        "❌ Відмічення заняття скасовано.",
+        text,
         reply_markup=_main_keyboard(update.effective_user.id),
         do_quote=False,
     )
