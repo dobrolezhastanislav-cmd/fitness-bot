@@ -309,11 +309,11 @@ def is_client_registered_for_class(client_id, class_id) -> bool:
         for r in _records("2_2_Attendance")
     )
 
-async def register_client(client: dict, cls: dict, charge_type: str = "Subscription") -> tuple[bool, str]:
+async def register_client(client: dict, cls: dict) -> tuple[bool, str]:
     """
     Add a new Planned row to 2_2_Attendance, or reactivate a Cancelled one.
-    charge_type is written to the ChargeType column ("Subscription" or "Single");
-    the sheet's UsedGroup formula only counts "Subscription" rows.
+    ChargeType is computed by get_charge_type() and always written (the sheet's
+    UsedGroup formula excludes only "Single").
     Returns (success: bool, error_key: str).
     error_key is '' on success, 'closed', 'full', or 'already_registered' otherwise.
 
@@ -346,6 +346,8 @@ async def register_client(client: dict, cls: dict, charge_type: str = "Subscript
             slots = 0
         if slots <= 0:
             return False, "full"
+
+        charge_type = get_charge_type(client["ClientID"], fresh_cls.get("ClassName", ""))
 
         # If a Cancelled row already exists for this client+class, reactivate it
         # instead of inserting a duplicate row.
@@ -580,6 +582,48 @@ def mark_attendance_statuses(class_id, attended_client_ids: list) -> bool:
     return updated
 
 
+def cancel_class_attendances(class_id, reason: str) -> int:
+    """Cancel every Planned registration for a cancelled class.
+
+    Sets AttendanceStatus='Cancelled', appends "Заняття скасовано: <reason>" to
+    Notes (keeps any existing coach note) and stamps DLM. One batched write.
+    Returns the number of rows cancelled.
+    """
+    ws = _sheet("2_2_Attendance")
+    all_values = ws.get_all_values()
+    if not all_values:
+        return 0
+    lc = [h.strip().lower() for h in all_values[0]]
+    try:
+        class_col = lc.index("classid")
+        status_col = lc.index("attendancestatus")
+        notes_col = lc.index("notes")
+    except ValueError:
+        return 0
+    dlm_col = lc.index("dlm") if "dlm" in lc else None
+    note = f"Заняття скасовано: {reason}" if reason else "Заняття скасовано"
+
+    data = []
+    count = 0
+    for idx, row in enumerate(all_values[1:], start=2):
+        if len(row) <= max(class_col, status_col):
+            continue
+        if (str(row[class_col]).strip() != str(class_id)
+                or str(row[status_col]).strip().lower() != "planned"):
+            continue
+        existing = str(row[notes_col]).strip() if len(row) > notes_col else ""
+        cells = [(status_col, "Cancelled"), (notes_col, f"{existing} | {note}" if existing else note)]
+        if dlm_col is not None:
+            cells.append((dlm_col, _kyiv_now_str()))
+        for col, value in cells:
+            data.append({"range": f"2_2_Attendance!{_col_letter(col + 1)}{idx}", "values": [[value]]})
+        count += 1
+    if data:
+        ws.spreadsheet.values_batch_update({"valueInputOption": "USER_ENTERED", "data": data})
+        invalidate("2_2_Attendance", "2_1_Classes")
+    return count
+
+
 def set_cancellation_notes(class_id, reason: str) -> bool:
     """Write cancellation reason into Notes column of the class row in 2_1_Classes."""
     ws = _sheet("2_1_Classes")
@@ -737,6 +781,21 @@ def get_trx_subscription_status(client_id) -> str:
     if "групові" in category:
         return "groups_only"
     return "none"
+
+
+def get_charge_type(client_id, class_name) -> str:
+    """Value for 2_2_Attendance.ChargeType on a new registration.
+
+    'Single'       — class is TRX but the effective subscription doesn't include TRX
+    ''             — client has no effective subscription (valid / not yet)
+    'Subscription' — otherwise
+    """
+    status = get_trx_subscription_status(client_id)
+    if status == "none":
+        return ""
+    if status == "groups_only" and "trx" in str(class_name).lower():
+        return "Single"
+    return "Subscription"
 
 
 def cancel_registration(client_id, class_id) -> tuple[bool, str]:

@@ -587,7 +587,7 @@ async def cb_trx_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.edit_message_text("Заняття не знайдено.")
             return
 
-        ok, err = await sheets.register_client(client, cls, charge_type="Single")
+        ok, err = await sheets.register_client(client, cls)
         if ok:
             formatted = _short_datetime(cls.get("ClassDate"), cls.get("ClassStart"))
             # Single-paid class doesn't touch the subscription → don't subtract 1.
@@ -907,10 +907,12 @@ async def mark_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if class_id:
         sheets.set_cancellation_notes(class_id, reason)
+        cancelled = sheets.cancel_class_attendances(class_id, reason)
         cls = sheets.get_class_by_id(class_id)
         class_label = _class_label(cls) if cls else f"#{class_id}"
         await update.message.reply_text(
-            f"✅ Причину скасування заняття *{class_label}* збережено.",
+            f"✅ Причину скасування заняття *{class_label}* збережено.\n"
+            f"Скасовано записів клієнтів: {cancelled}",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=_main_keyboard(update.effective_user.id),
             do_quote=False,
@@ -923,10 +925,17 @@ async def mark_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def mark_class_cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Fallback /cancel inside the mark-class conversation."""
-    context.user_data.pop("marking_class_id", None)
+    class_id = context.user_data.pop("marking_class_id", None)
     context.user_data.pop("attendance", None)
+    if class_id:
+        # Class is already Cancelled in 2_1_Classes; don't leave registrations Planned.
+        cancelled = sheets.cancel_class_attendances(class_id, "")
+        text = (f"Заняття залишається скасованим, причину не вказано.\n"
+                f"Скасовано записів клієнтів: {cancelled}")
+    else:
+        text = "❌ Відмічення заняття скасовано."
     await update.message.reply_text(
-        "❌ Відмічення заняття скасовано.",
+        text,
         reply_markup=_main_keyboard(update.effective_user.id),
         do_quote=False,
     )
