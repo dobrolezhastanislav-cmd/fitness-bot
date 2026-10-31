@@ -582,6 +582,48 @@ def mark_attendance_statuses(class_id, attended_client_ids: list) -> bool:
     return updated
 
 
+def cancel_class_attendances(class_id, reason: str) -> int:
+    """Cancel every Planned registration for a cancelled class.
+
+    Sets AttendanceStatus='Cancelled', appends "Заняття скасовано: <reason>" to
+    Notes (keeps any existing coach note) and stamps DLM. One batched write.
+    Returns the number of rows cancelled.
+    """
+    ws = _sheet("2_2_Attendance")
+    all_values = ws.get_all_values()
+    if not all_values:
+        return 0
+    lc = [h.strip().lower() for h in all_values[0]]
+    try:
+        class_col = lc.index("classid")
+        status_col = lc.index("attendancestatus")
+        notes_col = lc.index("notes")
+    except ValueError:
+        return 0
+    dlm_col = lc.index("dlm") if "dlm" in lc else None
+    note = f"Заняття скасовано: {reason}" if reason else "Заняття скасовано"
+
+    data = []
+    count = 0
+    for idx, row in enumerate(all_values[1:], start=2):
+        if len(row) <= max(class_col, status_col):
+            continue
+        if (str(row[class_col]).strip() != str(class_id)
+                or str(row[status_col]).strip().lower() != "planned"):
+            continue
+        existing = str(row[notes_col]).strip() if len(row) > notes_col else ""
+        cells = [(status_col, "Cancelled"), (notes_col, f"{existing} | {note}" if existing else note)]
+        if dlm_col is not None:
+            cells.append((dlm_col, _kyiv_now_str()))
+        for col, value in cells:
+            data.append({"range": f"2_2_Attendance!{_col_letter(col + 1)}{idx}", "values": [[value]]})
+        count += 1
+    if data:
+        ws.spreadsheet.values_batch_update({"valueInputOption": "USER_ENTERED", "data": data})
+        invalidate("2_2_Attendance", "2_1_Classes")
+    return count
+
+
 def set_cancellation_notes(class_id, reason: str) -> bool:
     """Write cancellation reason into Notes column of the class row in 2_1_Classes."""
     ws = _sheet("2_1_Classes")

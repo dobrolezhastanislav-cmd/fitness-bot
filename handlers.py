@@ -907,10 +907,12 @@ async def mark_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if class_id:
         sheets.set_cancellation_notes(class_id, reason)
+        cancelled = sheets.cancel_class_attendances(class_id, reason)
         cls = sheets.get_class_by_id(class_id)
         class_label = _class_label(cls) if cls else f"#{class_id}"
         await update.message.reply_text(
-            f"✅ Причину скасування заняття *{class_label}* збережено.",
+            f"✅ Причину скасування заняття *{class_label}* збережено.\n"
+            f"Скасовано записів клієнтів: {cancelled}",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=_main_keyboard(update.effective_user.id),
             do_quote=False,
